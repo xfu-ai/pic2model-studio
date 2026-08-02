@@ -1,0 +1,6 @@
+BEGIN;
+CREATE TABLE multiview_sets(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),source_asset_id TEXT NOT NULL REFERENCES assets(id),prompt_asset_id TEXT REFERENCES assets(id),status TEXT NOT NULL CHECK(status IN('draft','validated','confirmed','blocked')),validation_json TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE multiview_members(set_id TEXT NOT NULL REFERENCES multiview_sets(id) ON DELETE RESTRICT,view_name TEXT NOT NULL CHECK(view_name IN('front','side','back')),revision INTEGER NOT NULL CHECK(revision>0),asset_id TEXT REFERENCES assets(id),selection_id TEXT REFERENCES selections(id),is_current INTEGER NOT NULL DEFAULT 1 CHECK(is_current IN(0,1)),ordinal INTEGER NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(set_id,view_name,revision));
+CREATE UNIQUE INDEX ux_multiview_current_member ON multiview_members(set_id,view_name) WHERE is_current=1;
+CREATE TABLE multiview_issue_overrides(set_id TEXT NOT NULL REFERENCES multiview_sets(id),issue_id TEXT NOT NULL,confirmed_by_user INTEGER NOT NULL CHECK(confirmed_by_user=1),event_id TEXT NOT NULL UNIQUE,reason TEXT,created_at TEXT NOT NULL,PRIMARY KEY(set_id,issue_id));
+COMMIT;

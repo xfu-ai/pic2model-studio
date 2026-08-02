@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "format_version", "project", "assets", "asset_links", "selections", "decisions", "exported_at"],
+  "properties": {
+    "format": {"const": "AIPicToModelProject"},
+    "format_version": {"const": 1},
+    "exported_at": {"type": "string", "minLength": 1},
+    "project": {"type": "object", "additionalProperties": true, "required": ["id", "name", "root_path", "created_at", "updated_at"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "root_path": {"const": "."}, "created_at": {"type": "string"}, "updated_at": {"type": "string"}}},
+    "assets": {"type": "array", "items": {"$ref": "#/$defs/asset"}},
+    "asset_links": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["from_asset_id", "to_asset_id", "relation_type"], "properties": {"from_asset_id": {"type": "string"}, "to_asset_id": {"type": "string"}, "relation_type": {"type": "string"}}}},
+    "selections": {"type": "array", "items": {"type": "object"}},
+    "decisions": {"type": "array", "items": {"type": "object"}}
+  },
+  "$defs": {"asset": {"type": "object", "additionalProperties": false, "required": ["id", "project_id", "asset_family_id", "parent_asset_id", "asset_type", "asset_group", "name", "version_no", "relative_path", "thumbnail_asset_id", "mime_type", "size_bytes", "sha256", "metadata_json", "provenance_json", "is_current", "is_hidden", "trashed_at", "original_relative_path", "created_at"], "properties": {"id": {"type": "string"}, "project_id": {"type": "string"}, "asset_family_id": {"type": "string"}, "parent_asset_id": {"type": ["string", "null"]}, "asset_type": {"type": "string"}, "asset_group": {"type": ["string", "null"]}, "name": {"type": "string"}, "version_no": {"type": "integer", "minimum": 1}, "relative_path": {"type": "string", "minLength": 1}, "thumbnail_asset_id": {"type": ["string", "null"]}, "mime_type": {"type": "string"}, "size_bytes": {"type": "integer", "minimum": 0}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "metadata_json": {"type": "string"}, "provenance_json": {"type": "string"}, "is_current": {"type": "integer", "enum": [0, 1]}, "is_hidden": {"type": "integer", "enum": [0, 1]}, "trashed_at": {"type": ["string", "null"]}, "original_relative_path": {"type": ["string", "null"]}, "created_at": {"type": "string"}}}}
+}

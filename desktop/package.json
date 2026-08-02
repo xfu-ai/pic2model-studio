@@ -1,0 +1,15 @@
+{
+  "name": "aipic-to-model-desktop",
+  "private": true,
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "dev": "pnpm --dir frontend dev",
+    "build": "pnpm run build:sidecar && pnpm --dir frontend build",
+    "build:sidecar": "..\\.venv\\Scripts\\python.exe src-tauri/scripts/build_sidecar.py",
+    "test": "pnpm --dir frontend test",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.5"
+  }
+}

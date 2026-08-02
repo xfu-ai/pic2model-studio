@@ -1,0 +1,16 @@
+html:has(.screen-capture-picker),body:has(.screen-capture-picker),#root:has(.screen-capture-picker){width:100%;height:100%;margin:0;overflow:hidden;background:#050807}
+.screen-capture-picker{position:fixed;inset:0;overflow:hidden;background:#050807;color:#f8fafc;font-family:var(--font-family);user-select:none}
+.screen-capture-stage{position:absolute;inset:0;overflow:hidden;cursor:crosshair;touch-action:none}
+.screen-capture-stage>img{display:block;width:100%;height:100%;object-fit:fill;pointer-events:none}
+.screen-capture-dim{position:absolute;inset:0;background:rgb(0 0 0 / 38%);pointer-events:none}
+.screen-capture-selection{position:absolute;border:2px solid #67f0b0;background:transparent;box-shadow:0 0 0 1px rgb(0 0 0 / 60%),0 0 0 9999px rgb(0 0 0 / 50%);pointer-events:none}
+.screen-capture-selection::before,.screen-capture-selection::after{content:"";position:absolute;width:10px;height:10px;border-radius:50%;background:#67f0b0;box-shadow:0 0 0 2px rgb(0 0 0 / 55%)}
+.screen-capture-selection::before{top:-6px;left:-6px}.screen-capture-selection::after{right:-6px;bottom:-6px}
+.screen-capture-help{position:absolute;top:24px;left:50%;display:flex;align-items:center;gap:12px;transform:translateX(-50%);padding:12px 18px;border:1px solid rgb(255 255 255 / 16%);border-radius:12px;background:rgb(12 17 15 / 90%);box-shadow:0 12px 38px rgb(0 0 0 / 32%);backdrop-filter:blur(12px);pointer-events:none}
+.screen-capture-help div{display:grid;gap:2px}.screen-capture-help strong{font-size:15px}.screen-capture-help span{color:#b7c3be;font-size:12px}
+.screen-capture-actions{position:absolute;right:24px;bottom:24px;display:flex;align-items:center;gap:10px;padding:10px;border:1px solid rgb(255 255 255 / 16%);border-radius:12px;background:rgb(12 17 15 / 92%);box-shadow:0 14px 42px rgb(0 0 0 / 35%);backdrop-filter:blur(14px)}
+.screen-capture-actions output{min-width:170px;padding:0 10px;color:#d7e1dd;font-variant-numeric:tabular-nums;text-align:center}
+.screen-capture-actions [role=alert]{max-width:280px;color:#fecaca;font-size:12px}
+.screen-capture-actions button{display:inline-flex;min-height:38px;align-items:center;justify-content:center;gap:7px;border:1px solid rgb(255 255 255 / 16%);border-radius:8px;padding:0 14px;background:#1c2521;color:#f8fafc;font:inherit;cursor:pointer}
+.screen-capture-actions button:hover:not(:disabled){background:#2a3731}.screen-capture-actions button:disabled{cursor:not-allowed;opacity:.45}
+.screen-capture-actions button.primary{border-color:#4ade80;background:#258d56}.screen-capture-actions button.primary:hover:not(:disabled){background:#2fa768}

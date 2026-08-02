@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "candidate_group": {
+    "id": "fixture-candidate-group",
+    "requested_count": 2,
+    "status": "selected",
+    "selected_asset_ids": ["fixture-image-2"]
+  },
+  "selection": {
+    "id": "fixture-selection",
+    "asset_id": "fixture-image-2",
+    "revision": 3,
+    "status": "confirmed",
+    "visual_state": "user_confirmed"
+  },
+  "multiview": {
+    "members": {"front": "fixture-front", "side": "fixture-side", "back": "fixture-back"},
+    "can_continue": true,
+    "rules_version": 1
+  },
+  "model": {
+    "asset_id": "fixture-glb",
+    "format": "glb",
+    "animation": {"available": false, "reason": "The model has no animations."},
+    "render_preview": {
+      "available": false,
+      "reason": "No approved local PreviewRenderer is available.",
+      "tool_name": "model3d.render_preview"
+    }
+  }
+}

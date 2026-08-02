@@ -1,0 +1,103 @@
+{
+  "capability": "model_conversion",
+  "execution": "job",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "asset_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "target_format": {
+        "const": "fbx"
+      }
+    },
+    "required": [
+      "asset_id",
+      "target_format"
+    ],
+    "type": "object"
+  },
+  "name": "model3d.convert",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "error": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "expected_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "job": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "ok": {
+        "type": "boolean"
+      },
+      "output_asset_ids": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reused": {
+        "type": "boolean"
+      },
+      "status": {
+        "enum": [
+          "succeeded",
+          "queued",
+          "awaiting_ui_action",
+          "failed"
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "tool_call_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "ui_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "ok",
+      "status",
+      "tool_call_id",
+      "output_asset_ids",
+      "summary",
+      "warnings",
+      "expected_action",
+      "ui_action",
+      "job",
+      "error",
+      "reused"
+    ],
+    "type": "object"
+  },
+  "requires_approval": false,
+  "risk_level": "local_reversible",
+  "schema_version": 1,
+  "version": "1.0.0"
+}

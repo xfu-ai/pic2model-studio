@@ -1,0 +1,4 @@
+import { DownloadSimple, FolderSimple, ListChecks, SquaresFour } from "@phosphor-icons/react";
+export type PrimaryRoute = "workspace" | "assets" | "tasks" | "exports";
+const items = [{ id: "workspace", label: "工作区", icon: SquaresFour }, { id: "assets", label: "资产", icon: FolderSimple }, { id: "tasks", label: "任务", icon: ListChecks }, { id: "exports", label: "导出", icon: DownloadSimple }] as const;
+export function Navigation({ route, onChange }: { route: PrimaryRoute; onChange(route: PrimaryRoute): void }) { return <nav className="primary-navigation" aria-label="主导航">{items.map(({ id, label, icon: Icon }) => <button key={id} className={route === id ? "nav-item active" : "nav-item"} aria-current={route === id ? "page" : undefined} onClick={() => onChange(id)} title={label}><Icon size={22} /><span>{label}</span></button>)}</nav>; }

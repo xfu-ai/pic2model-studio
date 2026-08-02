@@ -1,0 +1,156 @@
+{
+  "capability": null,
+  "execution": "sync",
+  "input_schema": {
+    "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "mode": {
+              "const": "grid"
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        "then": {
+          "required": [
+            "columns",
+            "rows"
+          ]
+        }
+      }
+    ],
+    "properties": {
+      "alpha_threshold": {
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "columns": {
+        "maximum": 64,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "max_outputs": {
+        "maximum": 256,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "min_area": {
+        "maximum": 100000000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "mode": {
+        "enum": [
+          "alpha_components",
+          "grid"
+        ]
+      },
+      "padding": {
+        "maximum": 256,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "rows": {
+        "maximum": 64,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "source_asset_id": {
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "source_asset_id",
+      "mode"
+    ],
+    "type": "object"
+  },
+  "name": "image.split_local",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "error": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "expected_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "job": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "ok": {
+        "type": "boolean"
+      },
+      "output_asset_ids": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reused": {
+        "type": "boolean"
+      },
+      "status": {
+        "enum": [
+          "succeeded",
+          "queued",
+          "awaiting_ui_action",
+          "failed"
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "tool_call_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "ui_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "ok",
+      "status",
+      "tool_call_id",
+      "output_asset_ids",
+      "summary",
+      "warnings",
+      "expected_action",
+      "ui_action",
+      "job",
+      "error",
+      "reused"
+    ],
+    "type": "object"
+  },
+  "requires_approval": false,
+  "risk_level": "local_reversible",
+  "schema_version": 1,
+  "version": "1.0.0"
+}

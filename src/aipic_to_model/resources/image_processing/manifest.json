@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "resources": [
+    {
+      "path": "models/realesrgan-x4.onnx",
+      "bytes": 66991363,
+      "sha256": "10a7a075719220ee6627124473ce57c74b7ef336b57bed4508d9353eaa8f17ef",
+      "source": "https://huggingface.co/AXERA-TECH/Real-ESRGAN/resolve/45767e2bceb3e624477af4922d31418a7a044bc5/onnx/realesrgan-x4.onnx",
+      "license": "BSD-3-Clause-Clear"
+    },
+    {
+      "path": "onnxruntime-web/1.21.0/ort-wasm-simd-threaded.jsep.mjs",
+      "bytes": 53602,
+      "sha256": "b69c8812bf2d8356dd248fef0abb35e22d1f05f9c593ca34d4b942f35ea93592",
+      "source": "onnxruntime-web@1.21.0",
+      "license": "MIT"
+    },
+    {
+      "path": "onnxruntime-web/1.21.0/ort-wasm-simd-threaded.jsep.wasm",
+      "bytes": 23914392,
+      "sha256": "0663b902fb3937883a34375926bdfe3e1c86cd4c99cbc04c06a7cdf46c78bdde",
+      "source": "onnxruntime-web@1.21.0",
+      "license": "MIT"
+    },
+    {
+      "path": "onnxruntime-web/1.21.0/ort-wasm-simd-threaded.mjs",
+      "bytes": 26583,
+      "sha256": "e9ba2350c370278fc90108f1514fb9ce6a4051341ab977b5b0dca7eca9e78dfa",
+      "source": "onnxruntime-web@1.21.0",
+      "license": "MIT"
+    },
+    {
+      "path": "onnxruntime-web/1.21.0/ort-wasm-simd-threaded.wasm",
+      "bytes": 12666427,
+      "sha256": "06b3f98e5aa2fffec1e3ac57a48bf1073828c6624e14d210750bc596c2e35d65",
+      "source": "onnxruntime-web@1.21.0",
+      "license": "MIT"
+    }
+  ]
+}

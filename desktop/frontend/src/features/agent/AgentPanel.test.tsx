@@ -1,0 +1,1175 @@
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentPanel } from "./AgentPanel";
+
+describe("AgentPanel", () => {
+  afterEach(() => { document.body.replaceChildren(); vi.unstubAllGlobals(); });
+
+  it("does not create duplicate bootstrap conversations in Strict Mode", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "first", state: "idle", message_count: 0 }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [] }),
+    };
+    render(<StrictMode><AgentPanel projectId="project-1" api={api as never} /></StrictMode>);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalledTimes(1));
+    expect(api.createAgentConversation.mock.calls[0][1]).toContain(
+      "status=awaiting_ui_action means the requested desktop action has not completed yet",
+    );
+  });
+
+  it("restores the most recent project conversation instead of creating a blank one", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [{ id: "restored", state: "idle", message_count: 2 }] }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn().mockResolvedValue({ items: [
+        { id: "user", role: "user", content: [{ type: "text", text: "Show my prior work" }] },
+        {
+          id: "assistant",
+          role: "assistant",
+          content: [{ type: "text", text: "Restored Agent answer" }],
+          details: { ui_action: { action_id: "old-selection", type: "select_rectangle", workspace_mode: "rectangle_selection" } },
+        },
+      ] }),
+    };
+    render(<AgentPanel projectId="project-1" api={api as never} onWorkspaceAction={onWorkspaceAction} />);
+    expect(await screen.findByText("Restored Agent answer")).toBeVisible();
+    expect(api.agentMessages).toHaveBeenCalledWith("project-1", "restored", 20);
+    expect(api.createAgentConversation).not.toHaveBeenCalled();
+    expect(onWorkspaceAction).not.toHaveBeenCalled();
+  });
+
+  it("loads earlier conversation messages in 20-message pages when scrolled to the top", async () => {
+    const allMessages = Array.from({ length: 25 }, (_, index) => ({
+      id: `message-${index + 1}`,
+      role: "user",
+      content: `History message ${index + 1}`,
+    }));
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 25 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn()
+        .mockResolvedValueOnce({
+          items: allMessages.slice(5),
+          event_cursor: 50,
+          next_before: 6,
+          has_more: true,
+        })
+        .mockResolvedValueOnce({
+          items: allMessages.slice(0, 5),
+          event_cursor: 50,
+          next_before: null,
+          has_more: false,
+        }),
+    };
+
+    const { container } = render(<AgentPanel projectId="project-1" api={api as never} />);
+    expect(await screen.findByText("History message 6")).toBeVisible();
+    expect(screen.queryByText("History message 1")).toBeNull();
+
+    const conversation = container.querySelector<HTMLElement>(".agent-conversation");
+    expect(conversation).not.toBeNull();
+    Object.defineProperty(conversation!, "scrollHeight", { configurable: true, value: 2_000 });
+    conversation!.scrollTop = 0;
+    fireEvent.scroll(conversation!);
+
+    expect(await screen.findByText("History message 1")).toBeVisible();
+    expect(api.agentMessages).toHaveBeenNthCalledWith(2, "project-1", "restored", 20, 6);
+    expect(screen.getByText("Start of conversation")).toBeVisible();
+  });
+
+  it("imports, previews, sends, and restores multiple selected managed image attachments", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:agent-input-image"),
+      revokeObjectURL: vi.fn(),
+    });
+    const attachment = {
+      id: "managed-image-1",
+      name: "reference.png",
+      mime_type: "image/png",
+      asset_type: "source_image",
+      is_current: true,
+      metadata: {},
+    };
+    const secondAttachment = {
+      ...attachment,
+      id: "managed-image-2",
+      name: "detail.webp",
+      mime_type: "image/webp",
+    };
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      importImage: vi.fn()
+        .mockResolvedValueOnce(attachment)
+        .mockResolvedValueOnce(secondAttachment),
+      assetContent: vi.fn().mockResolvedValue(new Blob(["image"], { type: "image/png" })),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [{
+        id: "persisted-user",
+        role: "user",
+        content: "Use both references.",
+        attachments: [
+          { asset_id: attachment.id, name: attachment.name, mime_type: attachment.mime_type },
+          { asset_id: secondAttachment.id, name: secondAttachment.name, mime_type: secondAttachment.mime_type },
+        ],
+      }] }),
+    };
+    const host = {
+      stageDroppedFile: vi.fn()
+        .mockResolvedValueOnce("image-capability-1")
+        .mockResolvedValueOnce("image-capability-2"),
+    };
+    render(<AgentPanel projectId="project-1" api={api as never} host={host as never} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalledTimes(1));
+
+    const fileInput = screen.getByLabelText("Choose images to attach");
+    const openPicker = vi.spyOn(fileInput, "click");
+    fireEvent.click(screen.getByRole("button", { name: "Attach images" }));
+    expect(openPicker).toHaveBeenCalledTimes(1);
+
+    const firstBytes = new Uint8Array([1, 2, 3]);
+    const secondBytes = new Uint8Array([4, 5, 6]);
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          { name: "reference.png", arrayBuffer: vi.fn().mockResolvedValue(firstBytes.buffer) },
+          { name: "detail.webp", arrayBuffer: vi.fn().mockResolvedValue(secondBytes.buffer) },
+        ],
+      },
+    });
+
+    expect(await screen.findByText("2 images ready")).toBeVisible();
+    expect(host.stageDroppedFile).toHaveBeenNthCalledWith(1, "project-1", "source_image", "reference.png", [1, 2, 3]);
+    expect(host.stageDroppedFile).toHaveBeenNthCalledWith(2, "project-1", "source_image", "detail.webp", [4, 5, 6]);
+    expect(api.importImage).toHaveBeenNthCalledWith(1, "project-1", "image-capability-1", expect.stringMatching(/^agent-image-import-/), undefined, "reference.png");
+    expect(api.importImage).toHaveBeenNthCalledWith(2, "project-1", "image-capability-2", expect.stringMatching(/^agent-image-import-/), undefined, "detail.webp");
+    expect(await screen.findByRole("img", { name: "Project image: reference.png" })).toHaveAttribute("src", "blob:agent-input-image");
+
+    fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "Use both references." } });
+    fireEvent.click(screen.getByLabelText("Send to Agent"));
+
+    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
+      "project-1",
+      "conversation-1",
+      "Use both references.",
+      expect.any(String),
+      true,
+      [attachment.id, secondAttachment.id],
+    ));
+    expect(await screen.findByLabelText("Attached images")).toBeVisible();
+    expect(screen.queryByText("source_asset_ref")).toBeNull();
+  });
+
+  it("stages a dropped image through the native host before attaching it", async () => {
+    const attachment = {
+      id: "managed-drop-1",
+      name: "drop.webp",
+      mime_type: "image/webp",
+      asset_type: "source_image",
+      is_current: true,
+      metadata: {},
+    };
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      importImage: vi.fn().mockResolvedValue(attachment),
+      assetContent: vi.fn().mockResolvedValue(new Blob(["image"], { type: "image/webp" })),
+    };
+    const host = {
+      stageDroppedFile: vi.fn().mockResolvedValue("drop-capability"),
+    };
+    const { container } = render(<AgentPanel projectId="project-1" api={api as never} host={host as never} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalledTimes(1));
+    const compose = container.querySelector(".agent-compose");
+    expect(compose).not.toBeNull();
+    const bytes = new Uint8Array([1, 2, 3]);
+
+    fireEvent.drop(compose!, {
+      dataTransfer: {
+        files: [{
+          name: "drop.webp",
+          arrayBuffer: vi.fn().mockResolvedValue(bytes.buffer),
+        }],
+      },
+    });
+
+    await waitFor(() => expect(host.stageDroppedFile).toHaveBeenCalledWith(
+      "project-1",
+      "source_image",
+      "drop.webp",
+      [1, 2, 3],
+    ));
+    expect(await screen.findByText("1 image ready")).toBeVisible();
+    expect(api.importImage).toHaveBeenCalledWith("project-1", "drop-capability", expect.stringMatching(/^agent-image-import-/), undefined, "drop.webp");
+  });
+
+  it("imports multiple Explorer drops from capability-only native events", async () => {
+    const firstAttachment = {
+      id: "managed-native-1",
+      name: "front.png",
+      mime_type: "image/png",
+      asset_type: "source_image",
+      is_current: false,
+      metadata: {},
+    };
+    const secondAttachment = {
+      ...firstAttachment,
+      id: "managed-native-2",
+      name: "side.jpg",
+      mime_type: "image/jpeg",
+    };
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      importImage: vi.fn()
+        .mockResolvedValueOnce(firstAttachment)
+        .mockResolvedValueOnce(secondAttachment),
+      assetContent: vi.fn().mockResolvedValue(new Blob(["image"], { type: "image/png" })),
+    };
+    let nativeDrop: ((items: Array<{ capabilityId: string; fileName: string }>) => void) | undefined;
+    const unlisten = vi.fn();
+    const host = {
+      setAgentDropProject: vi.fn().mockResolvedValue(undefined),
+      listenAgentImageDrop: vi.fn().mockImplementation(async (handler) => {
+        nativeDrop = handler;
+        return unlisten;
+      }),
+    };
+    const { unmount } = render(<AgentPanel projectId="project-1" api={api as never} host={host as never} />);
+    await waitFor(() => expect(host.setAgentDropProject).toHaveBeenCalledWith("project-1"));
+
+    act(() => nativeDrop?.([
+      { capabilityId: "native-capability-1", fileName: "front.png" },
+      { capabilityId: "native-capability-2", fileName: "side.jpg" },
+    ]));
+
+    expect(await screen.findByText("2 images ready")).toBeVisible();
+    expect(api.importImage).toHaveBeenNthCalledWith(
+      1,
+      "project-1",
+      "native-capability-1",
+      expect.stringMatching(/^agent-native-image-import-/),
+      undefined,
+      "front.png",
+    );
+    expect(api.importImage).toHaveBeenNthCalledWith(
+      2,
+      "project-1",
+      "native-capability-2",
+      expect.stringMatching(/^agent-native-image-import-/),
+      undefined,
+      "side.jpg",
+    );
+
+    unmount();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+    expect(host.setAgentDropProject).toHaveBeenLastCalledWith(null);
+  });
+
+  it("restores a durable queued Job and resumes terminal monitoring after remount", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 3 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn().mockResolvedValue({
+        items: [
+          { id: "request", role: "user", content: "Generate the image" },
+          {
+            id: "queued",
+            role: "tool_result",
+            tool_name: "generate_images",
+            content: [{ type: "text", text: "Job queued." }],
+            details: {
+              status: "queued",
+              job: { job_id: "job-restored", status: "queued" },
+            },
+          },
+          {
+            id: "internal",
+            role: "user",
+            content: "The user approved the external operation; job_id=job-restored. Follow the task and continue with preview, conversion, or export once it completes.",
+          },
+        ],
+      }),
+      job: vi.fn().mockResolvedValue({
+        id: "job-restored",
+        status: "running",
+        output_asset_ids: [],
+      }),
+      sendAgentMessage: vi.fn(),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    expect(await screen.findByText(/Background task is running/)).toBeVisible();
+    await waitFor(() => expect(api.job).toHaveBeenCalledWith("project-1", "job-restored"));
+    expect(screen.queryByText(/The user approved the external operation/)).toBeNull();
+    expect(screen.getByLabelText("Message the Agent")).not.toBeDisabled();
+  });
+
+  it("reports an interrupted durable Job instead of waiting forever", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 2 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            id: "queued",
+            role: "tool_result",
+            tool_name: "prepare_multiview",
+            content: [{ type: "text", text: "Job queued." }],
+            details: {
+              status: "queued",
+              job: { job_id: "job-interrupted", status: "queued" },
+            },
+          }],
+        })
+        .mockResolvedValue({ items: [] }),
+      job: vi.fn().mockResolvedValue({
+        id: "job-interrupted",
+        status: "interrupted",
+        output_asset_ids: [],
+        error: { user_message: "The Provider rate limit was reached." },
+      }),
+      sendAgentMessage: vi.fn()
+        .mockResolvedValueOnce({ state: "idle" })
+        .mockRejectedValueOnce(new Error("AGENT_BUSY"))
+        .mockResolvedValue({ state: "idle" }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
+      "project-1",
+      "restored",
+      expect.stringContaining("ended with status=interrupted"),
+      "agent-job-terminal-job-interrupted",
+      true,
+    ));
+    expect(api.sendAgentMessage.mock.calls[0][2]).toContain(
+      "The Provider rate limit was reached.",
+    );
+  });
+
+  it("keeps waiting through a resumable interrupted Job without an error", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 1 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn().mockResolvedValue({
+        items: [{
+          id: "queued",
+          role: "tool_result",
+          tool_name: "generate_model3d",
+          content: [{ type: "text", text: "Job queued." }],
+          details: {
+            status: "queued",
+            job: { job_id: "job-resumable", status: "queued" },
+          },
+        }],
+      }),
+      job: vi.fn().mockResolvedValue({
+        id: "job-resumable",
+        status: "interrupted",
+        output_asset_ids: [],
+        error: null,
+      }),
+      sendAgentMessage: vi.fn(),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    await waitFor(() => expect(api.job).toHaveBeenCalledWith("project-1", "job-resumable"));
+    expect(api.sendAgentMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("Background task is running");
+  });
+
+  it("does not emit a duplicate terminal message after control_job cancels the pending Job", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 1 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn().mockResolvedValue({
+        items: [{
+          id: "queued",
+          role: "tool_result",
+          tool_name: "generate_images",
+          content: [{ type: "text", text: "Job queued." }],
+          details: {
+            status: "queued",
+            job: { job_id: "job-cancelled", status: "queued" },
+          },
+        }],
+      }),
+      job: vi.fn().mockResolvedValue({
+        id: "job-cancelled",
+        status: "running",
+        output_asset_ids: [],
+      }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "tool.call",
+            payload: {
+              conversation_id: "restored",
+              tool_call: {
+                id: "cancel-call",
+                name: "control_job",
+                arguments: { action: "cancel", job_ref: "job-cancelled" },
+              },
+            },
+            created_at: new Date().toISOString(),
+          }, {
+            sequence_no: 2,
+            event_type: "tool.completed",
+            payload: {
+              conversation_id: "restored",
+              tool_call_id: "cancel-call",
+              tool_name: "control_job",
+              is_error: false,
+              result: {
+                content: [{ type: "text", text: "Cancellation requested." }],
+                details: { status: "succeeded" },
+                is_error: false,
+              },
+            },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 2,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 2 }),
+      sendAgentMessage: vi.fn(),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    await waitFor(() => expect(api.agentEvents).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText(/Background task is running/)).toBeNull());
+    expect(api.sendAgentMessage).not.toHaveBeenCalled();
+  });
+
+  it("labels multiview detection outputs as selections and opens the multiview workspace", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 1 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            id: "queued",
+            role: "tool_result",
+            tool_name: "prepare_multiview",
+            content: [{ type: "text", text: "Job queued." }],
+            details: {
+              status: "queued",
+              job: { job_id: "job-multiview", status: "queued" },
+            },
+          }],
+        })
+        .mockResolvedValue({ items: [] }),
+      job: vi.fn().mockResolvedValue({
+        id: "job-multiview",
+        job_type: "multiview.detect_regions",
+        status: "succeeded",
+        output_asset_ids: ["selection-front", "selection-side", "selection-back"],
+      }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+    };
+
+    render(<AgentPanel
+      projectId="project-1"
+      api={api as never}
+      onWorkspaceAction={onWorkspaceAction}
+    />);
+
+    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
+      "project-1",
+      "restored",
+      expect.stringContaining("result_selection_ids=selection-front,selection-side,selection-back"),
+      "agent-job-terminal-job-multiview",
+      true,
+    ));
+    expect(api.sendAgentMessage.mock.calls[0][2]).toContain(
+      "These are selection references, not asset references",
+    );
+    expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "multiview" }));
+  });
+
+  it("finishes image analysis without requesting asset or shell inspection", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 1 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            id: "queued",
+            role: "tool_result",
+            tool_name: "analyze_image",
+            content: [{ type: "text", text: "Job queued." }],
+            details: {
+              status: "queued",
+              job: { job_id: "job-analysis", status: "queued" },
+            },
+          }],
+        })
+        .mockResolvedValue({ items: [] }),
+      job: vi.fn().mockResolvedValue({
+        id: "job-analysis",
+        job_type: "image.analyze_style",
+        status: "succeeded",
+        output_asset_ids: ["analysis-result"],
+      }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+    };
+
+    render(<AgentPanel
+      projectId="project-1"
+      api={api as never}
+      onWorkspaceAction={onWorkspaceAction}
+    />);
+
+    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
+      "project-1",
+      "restored",
+      expect.stringContaining("FINAL RESPONSE ONLY"),
+      "agent-job-terminal-job-analysis",
+      true,
+    ));
+    expect(api.sendAgentMessage.mock.calls[0][2]).toContain(
+      "Do not call inspect_workspace, read, write, edit, bash, or any other Tool",
+    );
+    expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "compare" }));
+  });
+
+  it("finishes generated images with a final-only instruction", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 1 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            id: "queued",
+            role: "tool_result",
+            tool_name: "generate_images",
+            content: [{ type: "text", text: "Job queued." }],
+            details: {
+              status: "queued",
+              job: { job_id: "job-image", status: "queued" },
+            },
+          }],
+        })
+        .mockResolvedValue({ items: [] }),
+      job: vi.fn().mockResolvedValue({
+        id: "job-image",
+        job_type: "image.generate_variants",
+        status: "succeeded",
+        output_asset_ids: ["image-a", "image-b"],
+      }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+    };
+
+    render(
+      <AgentPanel
+        projectId="project-1"
+        api={api as never}
+        onWorkspaceAction={onWorkspaceAction}
+      />,
+    );
+
+    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
+      "project-1",
+      "restored",
+      expect.stringContaining("FINAL RESPONSE ONLY"),
+      "agent-job-terminal-job-image",
+      true,
+    ));
+    expect(api.sendAgentMessage.mock.calls[0][2]).toContain(
+      "Do not call inspect_workspace or any other Tool",
+    );
+    expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "candidate" }));
+  });
+
+  it("opens transparent export results in the candidate workspace", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 1 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            id: "queued",
+            role: "tool_result",
+            tool_name: "edit_image",
+            content: [{ type: "text", text: "Job queued." }],
+            details: {
+              status: "queued",
+              job: { job_id: "job-transparent", status: "queued" },
+            },
+          }],
+        })
+        .mockResolvedValue({ items: [] }),
+      job: vi.fn().mockResolvedValue({
+        id: "job-transparent",
+        job_type: "element.export_transparent",
+        status: "succeeded",
+        output_asset_ids: ["transparent-image"],
+      }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+    };
+
+    render(
+      <AgentPanel
+        projectId="project-1"
+        api={api as never}
+        onWorkspaceAction={onWorkspaceAction}
+      />,
+    );
+
+    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
+      "project-1",
+      "restored",
+      expect.stringContaining("FINAL RESPONSE ONLY"),
+      "agent-job-terminal-job-transparent",
+      true,
+    ));
+    expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "candidate" }));
+  });
+
+  it("lists the project's Pi-style saved conversations and restores the selected transcript", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [
+        { id: "recent", state: "idle", message_count: 4, preview: "Continue the current model", updated_at: new Date().toISOString() },
+        { id: "older", state: "idle", message_count: 2, preview: "Make a stylized fox", updated_at: "2026-07-27T00:00:00Z" },
+      ] }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn().mockImplementation((_projectId, conversationId) => Promise.resolve({ items: conversationId === "recent"
+        ? [{ id: "recent-answer", role: "assistant", content: [{ type: "text", text: "Latest answer" }] }]
+        : [{ id: "older-answer", role: "assistant", content: [{ type: "text", text: "Recovered fox answer" }] }],
+      })),
+    };
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+    expect(await screen.findByText("Latest answer")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Conversation history" }));
+    expect(screen.getByText("Project conversations")).toBeVisible();
+    expect(screen.getByText("Make a stylized fox")).toBeVisible();
+    fireEvent.click(screen.getByText("Make a stylized fox"));
+    expect(await screen.findByText("Recovered fox answer")).toBeVisible();
+    expect(api.agentMessages).toHaveBeenCalledWith("project-1", "older", 20);
+    expect(api.createAgentConversation).not.toHaveBeenCalled();
+  });
+
+  it("creates a separate empty conversation without discarding saved history", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [{ id: "saved", state: "idle", message_count: 2, preview: "Saved request" }] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "new", state: "idle", message_count: 0, preview: "" }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [{ id: "saved-answer", role: "assistant", content: [{ type: "text", text: "Saved answer" }] }] }),
+    };
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+    expect(await screen.findByText("Saved answer")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalledWith("project-1", expect.any(String), expect.any(String)));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation history" }));
+    expect(screen.getByText("Saved request")).toBeVisible();
+    expect(screen.getAllByText("New conversation").length).toBeGreaterThan(0);
+  });
+
+  it("creates a live conversation and exposes durable paid approvals", async () => {
+    const api = {
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+      agentMessages: vi.fn().mockResolvedValue({
+        items: [{
+          id: "assistant-tool-call", role: "assistant", content: [{ type: "tool_call", id: "call-1", name: "model3d.generate", arguments: {} }],
+        }, {
+          id: "tool-result", role: "tool_result", tool_call_id: "call-1", tool_name: "model3d.generate", content: [{ type: "text", text: "Approval required." }],
+          details: { ui_action: { action_id: "approval-1", type: "confirm_external_paid" } },
+        }],
+      }),
+      decideApproval: vi.fn().mockResolvedValue({ status: "queued", summary: "Job queued.", job: { job_id: "job-1" } }),
+      job: vi.fn().mockResolvedValue({ id: "job-1", status: "succeeded", output_asset_ids: ["glb-1"] }),
+    };
+    const onJobQueued = vi.fn();
+    render(<AgentPanel projectId="project-1" api={api as never} onJobQueued={onJobQueued} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "Create a model" } });
+    fireEvent.click(screen.getByLabelText("Send to Agent"));
+    expect(await screen.findByRole("button", { name: "Approve and run" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Approve and run" }));
+    await waitFor(() => expect(api.decideApproval).toHaveBeenCalledWith("project-1", "approval-1", true, expect.any(String)));
+    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledTimes(3));
+    expect(api.sendAgentMessage.mock.calls[1][2]).toContain("job_id=job-1");
+    expect(api.sendAgentMessage.mock.calls[2][2]).toContain("result_asset_ids=glb-1");
+    expect(api.sendAgentMessage.mock.calls[2][3]).toBe("agent-job-terminal-job-1");
+    expect(onJobQueued).toHaveBeenCalledOnce();
+    expect(screen.queryByText("The approval could not be submitted. Try again.")).toBeNull();
+  });
+
+  it("pairs tool results with their assistant tool call and keeps raw output collapsed", async () => {
+    const output = JSON.stringify(Array.from({ length: 21 }, (_, index) => ({ name: `asset-${index}`, asset_type: "source_image", is_current: index === 0 })), null, 2);
+    const api = {
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [
+        { id: "assistant", role: "assistant", content: [{ type: "tool_call", id: "assets-call", name: "asset.list", arguments: {} }] },
+        { id: "assets", role: "tool_result", tool_call_id: "assets-call", tool_name: "asset.list", content: [{ type: "text", text: output }] },
+        { id: "reply", role: "assistant", content: [{ type: "text", text: "PI_UI_TOOL_OK" }] },
+      ] }),
+    };
+    const { container } = render(<AgentPanel projectId="project-1" api={api as never} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "List the assets" } });
+    fireEvent.click(screen.getByLabelText("Send to Agent"));
+
+    await screen.findByText("PI_UI_TOOL_OK");
+    expect(container.querySelector(".agent-tool-execution.success")).toBeNull();
+    expect(screen.getByText(/21 assets/)).toBeVisible();
+    expect(screen.queryByText("asset-1")).toBeNull();
+    expect(screen.queryByText(output)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show tool output" }));
+    expect(container.querySelector(".agent-tool-output")?.textContent).toBe(output);
+    expect(screen.getByLabelText("Message the Agent")).toBeVisible();
+  });
+
+  it("uses Pi-style compact renderers for successful read and bash output", async () => {
+    const bashOutput = Array.from({ length: 8 }, (_, index) => `line-${index + 1}`).join("\n");
+    const api = {
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [
+        { id: "tools", role: "assistant", content: [
+          { type: "tool_call", id: "read-call", name: "read", arguments: { path: "notes.txt" } },
+          { type: "tool_call", id: "bash-call", name: "bash", arguments: { command: "example" } },
+        ] },
+        { id: "read-result", role: "tool_result", tool_call_id: "read-call", tool_name: "read", content: [{ type: "text", text: "hidden file contents" }] },
+        { id: "bash-result", role: "tool_result", tool_call_id: "bash-call", tool_name: "bash", content: [{ type: "text", text: bashOutput }] },
+      ] }),
+    };
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "Inspect" } });
+    fireEvent.click(screen.getByLabelText("Send to Agent"));
+
+    await screen.findByText(/line-8/);
+    expect(screen.queryByText("hidden file contents")).toBeNull();
+    expect(screen.queryByText("line-1")).toBeNull();
+    expect(screen.getByText(/3 earlier lines/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Show tool output" }));
+    expect(screen.getByText(/hidden file contents/)).toBeVisible();
+    expect(screen.getByText(/line-1/)).toBeVisible();
+  });
+
+  it("attaches a selected existing image to the final assistant message, not its tool card", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:agent-generated-cat"),
+      revokeObjectURL: vi.fn(),
+    });
+    const api = {
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [
+        { id: "assistant", role: "assistant", content: [{ type: "tool_call", id: "show-cat", name: "asset.get_metadata", arguments: {} }] },
+        {
+          id: "generated-cat-result",
+          role: "tool_result",
+          tool_call_id: "show-cat",
+          tool_name: "asset.get_metadata",
+          content: [{ type: "text", text: "Found the existing cat image." }],
+          details: { status: "succeeded", output_asset_ids: ["cat-asset"] },
+        },
+        { id: "reply", role: "assistant", content: [{ type: "text", text: "Your cat image is ready." }] },
+      ] }),
+      assets: vi.fn().mockResolvedValue([{
+        id: "cat-asset", asset_type: "generated_image", name: "orange-cat.png", is_current: true, metadata: {},
+      }]),
+      assetContent: vi.fn().mockResolvedValue(new Blob(["image"], { type: "image/png" })),
+    };
+    const { container } = render(<AgentPanel projectId="project-1" api={api as never} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "Generate a cat" } });
+    fireEvent.click(screen.getByLabelText("Send to Agent"));
+
+    const image = await screen.findByRole("img", { name: "Project image: orange-cat.png" });
+    expect(image).toHaveAttribute("src", "blob:agent-generated-cat");
+    const answer = screen.getByText("Your cat image is ready.").closest<HTMLElement>("article.agent-message.assistant");
+    expect(answer).not.toBeNull();
+    expect(within(answer!).getByRole("img", { name: "Project image: orange-cat.png" })).toBe(image);
+    expect(container.querySelector(".agent-tool-execution .agent-chat-image")).toBeNull();
+    expect(screen.queryByText("Found the existing cat image.")).toBeNull();
+  });
+
+  it("does not attach every image returned by asset.list", async () => {
+    const api = {
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [
+        { id: "assistant", role: "assistant", content: [{ type: "tool_call", id: "list-call", name: "asset.list", arguments: {} }] },
+        {
+          id: "list-result",
+          role: "tool_result",
+          tool_call_id: "list-call",
+          tool_name: "asset.list",
+          content: [{ type: "text", text: "Found matching robot images." }],
+          details: { status: "succeeded", output_asset_ids: ["robot-1", "robot-2"] },
+        },
+        { id: "reply", role: "assistant", content: [{ type: "text", text: "I found two robot images. Choose one and I can present it." }] },
+      ] }),
+      assets: vi.fn(),
+    };
+    const { container } = render(<AgentPanel projectId="project-1" api={api as never} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "Find robot images" } });
+    fireEvent.click(screen.getByLabelText("Send to Agent"));
+
+    await screen.findByText("I found two robot images. Choose one and I can present it.");
+    expect(api.assets).not.toHaveBeenCalled();
+    expect(container.querySelector(".agent-chat-image")).toBeNull();
+  });
+
+  it("attaches a completed generated image to the final assistant message", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:agent-cthulhu-cover"),
+      revokeObjectURL: vi.fn(),
+    });
+    const api = {
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [
+        {
+          id: "job-complete",
+          role: "user",
+          content: [{ type: "text", text: "Task job_id=job-1 completed, result_asset_ids=cthulhu-cover. Reply to the user now with a concise completion summary; the generated image will be displayed with your final chat answer. Do not call more tools unless the user asks." }],
+        },
+        { id: "reply", role: "assistant", content: [{ type: "text", text: "The Cthulhu-style cover is ready." }] },
+      ] }),
+      assets: vi.fn().mockResolvedValue([{
+        id: "cthulhu-cover", asset_type: "generated_image", name: "cthulhu-cover.png", is_current: true, metadata: {},
+      }]),
+      assetContent: vi.fn().mockResolvedValue(new Blob(["image"], { type: "image/png" })),
+    };
+    const { container } = render(<AgentPanel projectId="project-1" api={api as never} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "Generate a Cthulhu cover" } });
+    fireEvent.click(screen.getByLabelText("Send to Agent"));
+
+    const image = await screen.findByRole("img", { name: "Project image: cthulhu-cover.png" });
+    const answer = screen.getByText("The Cthulhu-style cover is ready.").closest<HTMLElement>("article.agent-message.assistant");
+    expect(answer).not.toBeNull();
+    expect(within(answer!).getByRole("img", { name: "Project image: cthulhu-cover.png" })).toBe(image);
+    expect(container.querySelector(".agent-tool-execution .agent-chat-image")).toBeNull();
+  });
+
+  it("renders thinking in-order and can replace a run with Pi's hidden label", async () => {
+    const api = {
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [{
+        id: "assistant", role: "assistant", content: [
+          { type: "thinking", thinking: "I should inspect the current asset." },
+          { type: "text", text: "The current asset is ready." },
+        ],
+      }] }),
+    };
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "Status" } });
+    fireEvent.click(screen.getByLabelText("Send to Agent"));
+    expect(await screen.findByText("I should inspect the current asset.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Hide thinking" }));
+    expect(screen.queryByText("I should inspect the current asset.")).toBeNull();
+    expect(screen.getByText("Thinking...")).toBeVisible();
+  });
+
+  it("shows a durable failed status when the Agent stops after tool execution", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [{
+        id: "terminal", role: "assistant", stop_reason: "error", content: [{ type: "text", text: "I could not finish the final response." }],
+      }] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "conversation.failed",
+            payload: { conversation_id: "conversation-1", code: "provider_error" },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 1,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 1 }),
+    };
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+    expect(await screen.findByText("I could not finish the final response.")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Agent stopped before completing this response. You can try again.");
+    expect(screen.getByText("The Agent stopped before it could finish its response. You can try again.")).toBeVisible();
+  });
+
+  it("shows a completed status only after the runtime completes the conversation", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [{
+        id: "reply", role: "assistant", content: [{ type: "text", text: "The task is complete." }],
+      }] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "conversation.completed",
+            payload: { conversation_id: "conversation-1" },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 1,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 1 }),
+    };
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+    expect(await screen.findByText("The task is complete.")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Agent completed this response.");
+  });
+
+  it("opens the matching workspace when a live tool requests user interaction", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "tool.completed",
+            payload: {
+              conversation_id: "conversation-1",
+              tool_call_id: "selection-call",
+              tool_name: "selection.request_user",
+              is_error: false,
+              result: {
+                content: [{ type: "text", text: "Waiting for the user to confirm a selection." }],
+                details: {
+                  status: "awaiting_ui_action",
+                  ui_action: {
+                    action_id: "selection-action",
+                    type: "select_rectangle",
+                    workspace_mode: "rectangle_selection",
+                  },
+                },
+                is_error: false,
+              },
+            },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 1,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 1 }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} onWorkspaceAction={onWorkspaceAction} />);
+
+    await waitFor(() => expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "selection" })));
+    expect(onWorkspaceAction).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Open selection" })).toBeVisible();
+  });
+
+  it("opens a completed facade workspace only once when the parent callback changes", async () => {
+    const firstWorkspaceAction = vi.fn();
+    const secondWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({
+        id: "conversation-1",
+        state: "idle",
+        message_count: 0,
+      }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "tool.completed",
+            payload: {
+              conversation_id: "conversation-1",
+              tool_call_id: "prompt-call",
+              tool_name: "prepare_prompt",
+              is_error: false,
+              result: {
+                content: [{ type: "text", text: "Prompt extracted." }],
+                details: { status: "succeeded" },
+                is_error: false,
+              },
+            },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 1,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 1 }),
+    };
+
+    const { rerender } = render(
+      <AgentPanel
+        projectId="project-1"
+        api={api as never}
+        onWorkspaceAction={firstWorkspaceAction}
+      />,
+    );
+
+    await waitFor(() => expect(firstWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "prompt_image" })));
+    expect(firstWorkspaceAction).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <AgentPanel
+        projectId="project-1"
+        api={api as never}
+        onWorkspaceAction={secondWorkspaceAction}
+      />,
+    );
+
+    await waitFor(() => expect(api.agentEvents).toHaveBeenCalled());
+    expect(firstWorkspaceAction).toHaveBeenCalledTimes(1);
+    expect(secondWorkspaceAction).not.toHaveBeenCalled();
+  });
+
+  it("opens direct target extraction when split_image needs the user to draw a box", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "tool.call",
+            payload: {
+              conversation_id: "conversation-1",
+              tool_call: {
+                id: "split-selection",
+                name: "split_image",
+                arguments: {
+                  source_asset_ref: "source-1",
+                  prompt_asset_ref: "prompt-1",
+                  split_mode: "boxsplit",
+                },
+              },
+            },
+            created_at: new Date().toISOString(),
+          }, {
+            sequence_no: 2,
+            event_type: "tool.completed",
+            payload: {
+              conversation_id: "conversation-1",
+              tool_call_id: "split-selection",
+              tool_name: "split_image",
+              is_error: false,
+              result: {
+                content: [{ type: "text", text: "Waiting for the user to confirm a selection." }],
+                details: {
+                  status: "awaiting_ui_action",
+                  ui_action: {
+                    action_id: "target-selection-action",
+                    type: "select_rectangle",
+                    workspace_mode: "rectangle_selection",
+                    asset_id: "source-1",
+                  },
+                },
+                is_error: false,
+              },
+            },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 2,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 2 }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} onWorkspaceAction={onWorkspaceAction} />);
+
+    await waitFor(() => expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "target_extract",
+      method: "direct",
+      assetId: "source-1",
+      actionId: "target-selection-action",
+      instruction: expect.stringContaining("框选"),
+    })));
+    expect(screen.getByRole("button", { name: "Open target extraction" })).toBeVisible();
+  });
+
+  it("opens the matching facade workspace when a paid Tool reaches approval", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "tool.call",
+            payload: {
+              conversation_id: "conversation-1",
+              tool_call: {
+                id: "split-call",
+                name: "split_image",
+                arguments: { split_mode: "element" },
+              },
+            },
+            created_at: new Date().toISOString(),
+          }, {
+            sequence_no: 2,
+            event_type: "tool.completed",
+            payload: {
+              conversation_id: "conversation-1",
+              tool_call_id: "split-call",
+              tool_name: "split_image",
+              is_error: false,
+              result: {
+                content: [{ type: "text", text: "Approval is required." }],
+                details: {
+                  status: "awaiting_ui_action",
+                  ui_action: {
+                    action_id: "split-approval",
+                    type: "approval_required",
+                    workspace_mode: "working",
+                  },
+                },
+                is_error: false,
+              },
+            },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 2,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 2 }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} onWorkspaceAction={onWorkspaceAction} />);
+
+    await waitFor(() => expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "target_extract",
+      method: "breakdown",
+    })));
+    expect(onWorkspaceAction).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Open target extraction" })).toBeVisible();
+  });
+});

@@ -1,0 +1,147 @@
+{
+  "capability": null,
+  "execution": "sync",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "flip": {
+        "enum": [
+          "none",
+          "horizontal",
+          "vertical"
+        ]
+      },
+      "lock_aspect_ratio": {
+        "type": "boolean"
+      },
+      "max_long_edge": {
+        "maximum": 16384,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "output_format": {
+        "enum": [
+          "png",
+          "jpeg",
+          "webp"
+        ]
+      },
+      "preserve_alpha": {
+        "type": "boolean"
+      },
+      "quality": {
+        "maximum": 100,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "rotate_degrees": {
+        "enum": [
+          0,
+          90,
+          180,
+          270
+        ]
+      },
+      "source_asset_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "target_height": {
+        "maximum": 16384,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "target_width": {
+        "maximum": 16384,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "source_asset_id"
+    ],
+    "type": "object"
+  },
+  "name": "image.normalize",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "error": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "expected_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "job": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "ok": {
+        "type": "boolean"
+      },
+      "output_asset_ids": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reused": {
+        "type": "boolean"
+      },
+      "status": {
+        "enum": [
+          "succeeded",
+          "queued",
+          "awaiting_ui_action",
+          "failed"
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "tool_call_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "ui_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "ok",
+      "status",
+      "tool_call_id",
+      "output_asset_ids",
+      "summary",
+      "warnings",
+      "expected_action",
+      "ui_action",
+      "job",
+      "error",
+      "reused"
+    ],
+    "type": "object"
+  },
+  "requires_approval": false,
+  "risk_level": "local_reversible",
+  "schema_version": 1,
+  "version": "1.0.0"
+}

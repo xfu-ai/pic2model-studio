@@ -1,0 +1,256 @@
+{
+  "capability": "tripo3d",
+  "execution": "job",
+  "input_schema": {
+    "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "mode": {
+              "const": "image"
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        "then": {
+          "required": [
+            "image_asset_id"
+          ]
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "mode": {
+              "const": "multiview"
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        "then": {
+          "required": [
+            "multiview_set_id",
+            "view_asset_ids"
+          ]
+        }
+      }
+    ],
+    "properties": {
+      "image_asset_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "mode": {
+        "enum": [
+          "image",
+          "multiview"
+        ]
+      },
+      "model": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "multiview_set_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_size": {
+            "type": "boolean"
+          },
+          "compress": {
+            "enum": [
+              "",
+              "geometry"
+            ]
+          },
+          "enable_image_autofix": {
+            "type": "boolean"
+          },
+          "face_limit": {
+            "default": 100000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "generate_parts": {
+            "type": "boolean"
+          },
+          "geometry_quality": {
+            "enum": [
+              "standard",
+              "detailed"
+            ]
+          },
+          "model_seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_version": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "orientation": {
+            "enum": [
+              "default",
+              "align_image"
+            ]
+          },
+          "pbr": {
+            "type": "boolean"
+          },
+          "quad": {
+            "type": "boolean"
+          },
+          "smart_low_poly": {
+            "type": "boolean"
+          },
+          "texture": {
+            "type": "boolean"
+          },
+          "texture_alignment": {
+            "enum": [
+              "original_image",
+              "geometry"
+            ]
+          },
+          "texture_quality": {
+            "enum": [
+              "standard",
+              "detailed",
+              "extreme"
+            ]
+          },
+          "texture_seed": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "provider_profile": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "view_asset_ids": {
+        "additionalProperties": false,
+        "properties": {
+          "back": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "front": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "side": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "front",
+          "side",
+          "back"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "mode",
+      "provider_profile",
+      "model",
+      "parameters"
+    ],
+    "type": "object"
+  },
+  "name": "model3d.generate",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "error": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "expected_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "job": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "ok": {
+        "type": "boolean"
+      },
+      "output_asset_ids": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reused": {
+        "type": "boolean"
+      },
+      "status": {
+        "enum": [
+          "succeeded",
+          "queued",
+          "awaiting_ui_action",
+          "failed"
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "tool_call_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "ui_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "ok",
+      "status",
+      "tool_call_id",
+      "output_asset_ids",
+      "summary",
+      "warnings",
+      "expected_action",
+      "ui_action",
+      "job",
+      "error",
+      "reused"
+    ],
+    "type": "object"
+  },
+  "requires_approval": true,
+  "risk_level": "external_paid",
+  "schema_version": 1,
+  "version": "1.0.0"
+}

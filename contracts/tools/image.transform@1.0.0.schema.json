@@ -1,0 +1,151 @@
+{
+  "capability": "image_generation",
+  "execution": "job",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "aspect_ratio": {
+        "type": "string"
+      },
+      "candidate_count": {
+        "enum": [
+          1,
+          2,
+          4
+        ],
+        "type": "integer"
+      },
+      "channel": {
+        "enum": [
+          "auto",
+          "meshy"
+        ]
+      },
+      "model": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "output_format": {
+        "enum": [
+          "png",
+          "jpg",
+          "webp"
+        ]
+      },
+      "prompt_asset_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "provider_profile": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "quality": {
+        "type": "string"
+      },
+      "size": {
+        "type": "string"
+      },
+      "source_asset_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "structure_strength": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+      }
+    },
+    "required": [
+      "prompt_asset_id",
+      "source_asset_id",
+      "provider_profile",
+      "channel",
+      "model",
+      "candidate_count"
+    ],
+    "type": "object"
+  },
+  "name": "image.transform",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "error": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "expected_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "job": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "ok": {
+        "type": "boolean"
+      },
+      "output_asset_ids": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reused": {
+        "type": "boolean"
+      },
+      "status": {
+        "enum": [
+          "succeeded",
+          "queued",
+          "awaiting_ui_action",
+          "failed"
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "tool_call_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "ui_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "ok",
+      "status",
+      "tool_call_id",
+      "output_asset_ids",
+      "summary",
+      "warnings",
+      "expected_action",
+      "ui_action",
+      "job",
+      "error",
+      "reused"
+    ],
+    "type": "object"
+  },
+  "requires_approval": true,
+  "risk_level": "external_paid",
+  "schema_version": 1,
+  "version": "1.0.0"
+}

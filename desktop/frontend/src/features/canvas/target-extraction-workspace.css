@@ -1,0 +1,56 @@
+.target-extraction-workspace{box-sizing:border-box;height:100%;min-height:0;overflow:hidden;padding:var(--space-4);display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:var(--space-3);position:relative}
+.target-extraction-workspace.dragging::after{content:"松开以导入图片";position:absolute;z-index:8;inset:112px var(--space-4) var(--space-4);display:grid;place-items:center;border:2px dashed #34d399;border-radius:var(--radius-lg);pointer-events:none;background:color-mix(in srgb,#052e22 88%,transparent);color:#d1fae5;font-weight:700}
+.target-extraction-workspace button{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-1-5)}
+.target-extraction-header{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-4);padding-bottom:var(--space-3);border-bottom:1px solid var(--color-border)}
+.target-extraction-header h1{margin:var(--space-0-5) 0;font-size:26px}.target-extraction-header p{max-width:620px;margin:0;color:var(--color-text-muted)}
+.target-source-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--space-2)}
+.target-agent-request{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2-5) var(--space-3);border:1px solid color-mix(in srgb,var(--color-accent) 58%,var(--color-border));border-radius:var(--radius-md);background:color-mix(in srgb,var(--color-accent) 10%,var(--color-surface-raised))}
+.target-agent-request span{color:var(--color-text-muted)}
+.target-extraction-layout{display:grid;grid-template-columns:280px minmax(360px,1fr) 290px;gap:var(--space-3);min-height:0}
+.target-settings-panel,.target-result-panel,.target-canvas-panel{min-width:0;min-height:0;border:1px solid var(--color-border);border-radius:var(--radius-lg);background:var(--color-surface-raised)}
+.target-settings-panel,.target-result-panel{overflow:auto;padding:var(--space-3);display:flex;flex-direction:column;gap:var(--space-3)}
+.target-settings-panel section{display:grid;gap:var(--space-2)}.target-settings-panel h2,.target-result-panel h2{margin:0;font-size:15px}
+.target-settings-panel img,.target-source-empty{width:100%;height:150px;object-fit:contain;border-radius:var(--radius-md);background:var(--color-canvas)}
+.target-source-empty{display:grid;place-items:center;padding:var(--space-3);box-sizing:border-box;border:1px dashed var(--color-border);color:var(--color-text-muted);font-size:13px;text-align:center}
+.target-settings-panel p,.target-result-panel>p{margin:0;color:var(--color-text-muted);font-size:12px;line-height:1.55}
+.target-methods{display:grid;gap:var(--space-2)}.target-methods button{justify-content:flex-start;padding:var(--space-2-5);text-align:left;background:transparent}.target-methods button.active{border-color:#34d399;background:color-mix(in srgb,#34d399 10%,var(--color-surface-raised))}
+.target-methods button span{display:grid;gap:2px}.target-methods small{color:var(--color-text-muted)}
+.target-intent{padding:var(--space-2-5);border:1px solid color-mix(in srgb,#34d399 35%,var(--color-border));border-radius:var(--radius-md);background:color-mix(in srgb,#34d399 7%,var(--color-surface-raised))}
+.target-intent.breakdown{border-color:color-mix(in srgb,#ff6060 35%,var(--color-border));background:color-mix(in srgb,#ff6060 7%,var(--color-surface-raised))}
+.target-breakdown-settings>div{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-1-5)}.target-breakdown-settings>div button:last-child{grid-column:1/-1}.target-breakdown-settings button.active{border-color:#ff6060;background:color-mix(in srgb,#ff6060 9%,var(--color-surface-raised))}.target-breakdown-settings label{display:grid;gap:var(--space-1-5);font-size:12px}.target-breakdown-settings textarea{min-height:92px;resize:vertical}
+.target-canvas-panel{display:flex;flex-direction:column;overflow:hidden}.target-canvas-heading{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);padding:var(--space-3);border-bottom:1px solid var(--color-border);color:var(--color-text-muted);font-size:12px}.target-canvas-heading div{display:flex;align-items:center;gap:var(--space-2);color:var(--color-text)}
+.target-zoom{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-3)}.target-zoom output{min-width:48px;text-align:center}
+.target-canvas-viewport{flex:1;min-height:0;overflow:auto;padding:var(--space-3);display:grid;place-items:center;background:linear-gradient(135deg,color-mix(in srgb,var(--color-canvas) 94%,#183528),var(--color-canvas))}
+.target-canvas{position:relative;display:inline-block;width:max-content;max-width:100%;touch-action:none}.target-canvas img{display:block;max-width:100%;max-height:calc(100vh - 360px);object-fit:contain;cursor:crosshair}
+.target-selection-rect{position:absolute;border:2px solid #34d399;background:color-mix(in srgb,#34d399 18%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,#052e22 80%,transparent);cursor:move}
+.target-selection-rect.breakdown{border-color:#ff4040;background:color-mix(in srgb,#ff4040 16%,transparent)}
+.target-selection-handle{position:absolute;width:11px;height:11px;border:1px solid var(--color-surface);border-radius:50%;background:#34d399;transform:translate(-50%,-50%)}.target-selection-rect.breakdown .target-selection-handle{background:#ff4040}
+.target-selection-handle.nw{top:0;left:0;cursor:nwse-resize}.target-selection-handle.ne{top:0;right:0;cursor:nesw-resize}.target-selection-handle.se{right:0;bottom:0;cursor:nwse-resize}.target-selection-handle.sw{bottom:0;left:0;cursor:nesw-resize}
+.target-canvas-empty{flex:1;display:grid;place-content:center;justify-items:center;gap:var(--space-2);color:var(--color-text-muted)}
+.target-selection-controls{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2)}.target-selection-controls label{display:grid;gap:var(--space-1);font-size:12px}.target-selection-controls input{width:100%;box-sizing:border-box}
+.target-edit-actions{display:flex;flex-wrap:wrap;gap:var(--space-2)}.target-generate{width:100%}
+.target-approval,.target-job-status{display:grid;gap:var(--space-2);padding:var(--space-2-5);border:1px solid var(--color-accent);border-radius:var(--radius-md);background:color-mix(in srgb,var(--color-accent) 8%,var(--color-surface-raised))}.target-approval p{margin:0;color:var(--color-text-muted);font-size:12px}.target-approval>div{display:flex;gap:var(--space-2)}
+.target-job-status span{color:var(--color-text-muted);font-size:12px}.target-job-status button{justify-self:start}
+.target-result-card{display:grid;gap:var(--space-2);padding-top:var(--space-3);border-top:1px solid var(--color-border)}.target-result-card img,.target-result-empty{width:100%;min-height:150px;max-height:230px;object-fit:contain;border-radius:var(--radius-md);background:var(--color-canvas)}.target-result-empty{display:grid;place-items:center;box-sizing:border-box;padding:var(--space-3);border:1px dashed var(--color-border);color:var(--color-text-muted);font-size:12px;text-align:center}
+.target-result-actions{display:grid;gap:var(--space-2)}.target-message{margin-top:auto;color:var(--color-text-muted);font-size:12px;line-height:1.5}
+.target-result-selector{display:flex;flex-wrap:wrap;gap:var(--space-1-5)}.target-result-selector button[aria-pressed=true]{border-color:var(--color-accent);background:color-mix(in srgb,var(--color-accent) 14%,var(--color-surface-raised))}
+@media (max-width:1200px){.target-extraction-workspace{overflow:auto}.target-extraction-layout{grid-template-columns:260px minmax(360px,1fr)}.target-result-panel{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}.target-result-panel>.target-result-card,.target-result-panel>.target-message{grid-column:1/-1}}
+@media (max-width:760px){.target-extraction-workspace{display:block;overflow:auto}.target-extraction-header{flex-direction:column}.target-source-actions{justify-content:flex-start}.target-extraction-layout{grid-template-columns:1fr;margin-top:var(--space-3)}.target-canvas-panel{min-height:520px}.target-result-panel{display:flex}.target-canvas-heading{align-items:flex-start;flex-direction:column}}
+
+/* The Agent drawer reduces workspace width without changing the viewport width. */
+.target-extraction-workspace{container-type:inline-size}
+@container (max-width:1000px){
+  .target-extraction-workspace{overflow:auto}
+  .target-extraction-layout{grid-template-columns:260px minmax(360px,1fr)}
+  .target-result-panel{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+  .target-result-panel>.target-result-card,.target-result-panel>.target-message{grid-column:1/-1}
+}
+@container (max-width:760px){
+  .target-extraction-workspace{display:block;overflow:auto}
+  .target-extraction-header{flex-direction:column}
+  .target-source-actions{justify-content:flex-start}
+  .target-extraction-layout{grid-template-columns:1fr;margin-top:var(--space-3)}
+  .target-canvas-panel{min-height:520px}
+  .target-result-panel{display:flex}
+  .target-canvas-heading{align-items:flex-start;flex-direction:column}
+}

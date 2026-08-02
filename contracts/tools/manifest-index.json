@@ -1,0 +1,317 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "name": "image.analyze_content",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "image.analyze_style",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "image.evaluate_3d_suitability",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "prompt.extract_bilingual",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "prompt.merge",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "prompt.get_current",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "read_only"
+    },
+    {
+      "name": "prompt.rewrite",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "prompt.validate",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "read_only"
+    },
+    {
+      "name": "image.generate",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external_paid"
+    },
+    {
+      "name": "image.transform",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external_paid"
+    },
+    {
+      "name": "image.generate_variants",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external_paid"
+    },
+    {
+      "name": "image.upscale",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "image.remove_background",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "image.inpaint_selection",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "image.crop",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "image.render_annotation",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "image.compress_for_provider",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "image.trim_transparent",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "image.normalize",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "image.remove_background_local",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "image.split_local",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "image.upscale_local",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "element.split",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external_paid"
+    },
+    {
+      "name": "element.export_transparent",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "selection.get_current",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "read_only"
+    },
+    {
+      "name": "selection.request_user",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "selection.set_suggestion",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "selection.auto_suggest_boxes",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "selection.confirm",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "multiview.generate",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external_paid"
+    },
+    {
+      "name": "multiview.detect_regions",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "multiview.request_box_confirmation",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "multiview.set_regions",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "multiview.crop_views",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "multiview.request_quality_confirmation",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "multiview.set_quality_checks",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "multiview.validate",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "multiview.regenerate_view",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external_paid"
+    },
+    {
+      "name": "model3d.generate",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external_paid"
+    },
+    {
+      "name": "model3d.get_status",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "external"
+    },
+    {
+      "name": "model3d.cancel",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "external"
+    },
+    {
+      "name": "model3d.download",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "external"
+    },
+    {
+      "name": "model3d.import_local",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "model3d.inspect",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "model3d.render_preview",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "model3d.convert",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "model3d.optimize",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "model3d.package",
+      "version": "1.0.0",
+      "execution": "job",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "job.get_status",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "read_only"
+    },
+    {
+      "name": "job.cancel",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "job.retry",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    },
+    {
+      "name": "job.confirm_new_submission",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "local_reversible"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "source_pi_commit": "8eef62ed3ea62d646a7fad92fa583fc8d71fec17",
+  "generated_at": "2026-07-25T16:00:00Z",
+  "generator": "packages/ai/scripts/generate-models.ts --strict --json-only --pretty",
+  "content_sha256": "067e2c2cc610e2ba946743716aec545baebb0ac6bdffb087fae68b43af656f53",
+  "model_count": 1110
+}

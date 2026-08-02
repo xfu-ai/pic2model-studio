@@ -1,0 +1,12 @@
+.project-package-actions { display: grid; align-content: start; gap: var(--space-4); min-height: 100%; padding: var(--space-5); }
+.project-package-actions h1 { margin: 0; font-size: var(--font-title); }
+.project-package-actions p { margin: 0; color: var(--color-text-muted); }
+.project-package-actions > p[role="status"] { display: flex; align-items: center; gap: var(--space-2); color: var(--color-warning); }
+.project-package-actions > .package-status.loading { color: var(--color-text-muted); }
+.project-package-actions > .package-status.success { color: var(--color-success); }
+.project-package-actions > .package-status.error { color: var(--color-warning); }
+.project-package-actions > div { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.project-package-actions button { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--size-control); border: var(--border-subtle); border-radius: var(--radius-sm); background: var(--color-surface-raised); padding: 0 var(--space-3); cursor: pointer; }
+.project-package-actions button.primary { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-primary-ink); }
+.package-action-description { line-height: 1.55; }
+.package-main-action { grid-template-columns: minmax(240px, 360px); }

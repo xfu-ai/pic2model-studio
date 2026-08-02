@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screen-capture-window",
+  "description": "Allow the isolated screen-capture overlay to exchange only its selection state with the native host.",
+  "windows": ["screen-capture-*"],
+  "permissions": [
+    "core:default"
+  ]
+}

@@ -1,0 +1,44 @@
+# Python bytecode and environments
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Test, lint, type-check, and coverage working state
+.benchmarks/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Editor and OS metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local temporary files
+*.tmp
+*.part
+*.bak
+~$*
+
+# Desktop build and dependency output
+desktop/node_modules/
+desktop/frontend/node_modules/
+desktop/frontend/dist/
+desktop/frontend/tsconfig.tsbuildinfo
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/resources/sidecar/*.exe
+
+# Local credentials and Provider diagnostic output
+/.local/
+
+# Generated validation evidence
+/tests/evidence/

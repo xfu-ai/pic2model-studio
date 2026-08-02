@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "job": {
+    "id": "fixture-job",
+    "status": "succeeded",
+    "stage": "verifying",
+    "resume_class": "download_retry",
+    "output_asset_ids": ["fixture-glb"]
+  },
+  "events": [
+    {"event_type": "candidate.selected", "aggregate_id": "fixture-candidate-group"},
+    {"event_type": "selection.confirmed", "aggregate_id": "fixture-selection"},
+    {
+      "event_type": "job.result_ready",
+      "aggregate_id": "fixture-job",
+      "payload": {"focus_policy": "respect_dirty_canvas"}
+    }
+  ],
+  "recovery": {
+    "remote_poll": "GET-only",
+    "download_retry": "download-only",
+    "unknown_submission": "manual-review"
+  }
+}

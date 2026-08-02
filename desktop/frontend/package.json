@@ -1,0 +1,33 @@
+{
+  "name": "aipic-to-model-workbench",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "pnpm run sync:model-viewer && tsc -b && vite build",
+    "sync:model-viewer": "node scripts/sync-model-viewer.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint:tokens": "node scripts/token-lint.mjs"
+  },
+  "dependencies": {
+    "@google/model-viewer": "^4.3.1",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tauri-apps/api": "^2.9.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "10.1.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.8"
+  }
+}

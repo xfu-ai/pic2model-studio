@@ -1,0 +1,195 @@
+{
+  "capability": null,
+  "execution": "sync",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "multiview_set_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "regions": {
+        "additionalProperties": false,
+        "properties": {
+          "back": {
+            "additionalProperties": false,
+            "properties": {
+              "height": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "width": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "x": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "y": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "type": "object"
+          },
+          "front": {
+            "additionalProperties": false,
+            "properties": {
+              "height": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "width": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "x": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "y": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "type": "object"
+          },
+          "side": {
+            "additionalProperties": false,
+            "properties": {
+              "height": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "width": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "x": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "y": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "front",
+          "side",
+          "back"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "multiview_set_id",
+      "regions"
+    ],
+    "type": "object"
+  },
+  "name": "multiview.set_regions",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "error": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "expected_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "job": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "ok": {
+        "type": "boolean"
+      },
+      "output_asset_ids": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "reused": {
+        "type": "boolean"
+      },
+      "status": {
+        "enum": [
+          "succeeded",
+          "queued",
+          "awaiting_ui_action",
+          "failed"
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "tool_call_id": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "ui_action": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "ok",
+      "status",
+      "tool_call_id",
+      "output_asset_ids",
+      "summary",
+      "warnings",
+      "expected_action",
+      "ui_action",
+      "job",
+      "error",
+      "reused"
+    ],
+    "type": "object"
+  },
+  "requires_approval": false,
+  "risk_level": "local_reversible",
+  "schema_version": 1,
+  "version": "1.0.0"
+}

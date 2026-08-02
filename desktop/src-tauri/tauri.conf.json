@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AIPicToModel",
+  "version": "0.1.0",
+  "identifier": "com.aipictomodel.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm --dir frontend dev --host 127.0.0.1 --port 14200 --strictPort",
+    "beforeBuildCommand": "pnpm run build",
+    "devUrl": "http://127.0.0.1:14200",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AIPicToModel",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' blob: http://127.0.0.1:*; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "resources": ["resources/sidecar/*"]
+  }
+}

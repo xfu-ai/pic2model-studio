@@ -1,0 +1,80 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, "Microsoft YaHei UI", system-ui, sans-serif;
+  --color-bg: #11100e;
+  --color-canvas: #0f0e0c;
+  --color-canvas-deep: #0c0b09;
+  --color-stage: #151411;
+  --color-surface: #1a1815;
+  --color-shell-deep: #151411;
+  --color-shell-nav: #171511;
+  --color-surface-raised: #211e19;
+  --color-surface-selected: #2a261f;
+  --color-border: #37322a;
+  --color-border-strong: #544b3c;
+  --color-text: #f4f0e8;
+  --color-text-muted: #aaa297;
+  --color-accent: #d9a441;
+  --color-accent-hover: #e7b955;
+  --color-primary-ink: #17120a;
+  --color-success: #4bc3a5;
+  --color-warning: #d9a441;
+  --color-danger: #e56b63;
+  --color-grid: #2c2924;
+  --color-selection-overlay: rgba(17, 16, 14, .66);
+  --space-0-5: 2px;
+  --space-0-75: 3px;
+  --space-1: 4px;
+  --space-1-25: 5px;
+  --space-1-5: 6px;
+  --space-1-75: 7px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-3-5: 14px;
+  --space-4: 16px;
+  --space-4-5: 18px;
+  --space-5: 20px;
+  --space-5-5: 22px;
+  --space-6: 24px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --shadow-card: 0 14px 34px #00000024;
+  --motion-fast: 120ms;
+  --motion-normal: 180ms;
+  --font-ui: 14px;
+  --font-small: 12px;
+  --font-tiny: 10px;
+  --font-title: 18px;
+  --size-topbar: 72px;
+  --size-taskbar: 28px;
+  --size-nav: 78px;
+  --size-nav-item: 62px;
+  --size-control: 34px;
+  --size-project-name: 160px;
+  --size-workspace-min: 680px;
+  --size-agent-min: 360px;
+  --size-agent-max: 520px;
+  --size-agent-collapsed: 48px;
+  --size-agent-header: 44px;
+  --size-composer: 96px;
+  --size-divider: 4px;
+  --size-empty-card: 420px;
+  --size-compact-min: 900px;
+  --size-grid: 24px;
+  --size-grid-line: 1px;
+  --border-subtle: 1px solid var(--color-border);
+  --focus-ring: 0 0 0 3px #9284ff66;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; min-width: 0; min-height: 100%; margin: 0; }
+body { background: var(--color-bg); color: var(--color-text); font-size: var(--font-ui); }
+button, input, textarea { font: inherit; }
+button { color: inherit; }
+button:focus-visible, [tabindex]:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; scroll-behavior: auto !important; transition-duration: 1ms !important; }
+}

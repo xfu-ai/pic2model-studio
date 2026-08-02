@@ -1,0 +1,18 @@
+.app-shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; background: var(--color-bg); }
+.boot-topbar { height: 64px; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-5); border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+.brand-mark { width: 24px; height: 24px; background: url("/src/assets/app-icon.png") center / contain no-repeat; }
+.boot-caption { color: var(--color-text-muted); border-left: 1px solid var(--color-border); padding-left: var(--space-3); }
+.boot-content { align-self: center; justify-self: center; width: min(480px, calc(100% - var(--space-6))); padding: var(--space-6); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-card); text-align: center; }
+.boot-content h1 { margin: var(--space-4) 0 var(--space-2); font-size: var(--font-title); }
+.boot-content p { margin: 0 0 var(--space-5); color: var(--color-text-muted); line-height: 1.6; }
+.primary, .leave-button, .dialog-actions button { min-height: 36px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-surface-raised); padding: 0 var(--space-3); cursor: pointer; transition: background var(--motion-fast) ease; }
+.primary { border-color: var(--color-accent); background: var(--color-accent); }
+.primary:hover { background: var(--color-accent-hover); }
+.success { color: var(--color-success); }.warning { color: var(--color-warning); }.danger { color: var(--color-danger); }.spin { animation: spin 0.8s linear infinite; color: var(--color-accent); }
+.leave-button { position: fixed; right: var(--space-4); bottom: var(--space-4); color: var(--color-text-muted); }
+.toast-center { position: fixed; right: var(--space-4); top: 76px; display: grid; gap: var(--space-2); width: min(360px, calc(100vw - var(--space-6))); }
+.toast { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
+.toast.success { border-left: 3px solid var(--color-success); }.toast.warning { border-left: 3px solid var(--color-warning); }.toast button { border: 0; background: none; cursor: pointer; }
+.dialog-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: var(--space-4); background: #00000099; }.dialog { width: min(420px, 100%); padding: var(--space-5); border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-card); }.dialog h2 { margin: 0 0 var(--space-2); font-size: var(--font-title); }.dialog p { margin: 0; color: var(--color-text-muted); }.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
+.app-recovery { min-height: 100vh; display: grid; place-content: center; gap: var(--space-3); padding: var(--space-6); text-align: center; }.app-recovery p { color: var(--color-text-muted); }
+@keyframes spin { to { transform: rotate(360deg); } }

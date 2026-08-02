@@ -1,0 +1,59 @@
+[project]
+name = "aipic-to-model"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+  "Pillow>=12",
+  "numpy>=2.3",
+  "onnxruntime==1.28.0",
+  "requests>=2.32",
+  "trimesh>=4.6",
+  "fast-simplification>=0.1.13",
+  "fastapi>=0.139",
+  "httpx>=0.28",
+  "httpx2>=0.28",
+  "truststore>=0.10.4",
+  "jsonschema>=4.26",
+  "uvicorn>=0.35",
+  "pydantic>=2.13",
+  "keyring>=25",
+  "cryptography==49.0.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=9",
+  "pytest-asyncio>=1",
+  "pytest-cov>=7",
+  "pytest-benchmark>=5",
+  "hypothesis>=6",
+  "ruff>=0.12",
+  "pyright>=1.1",
+  "pyinstaller>=6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = "--strict-markers"
+markers = [
+  "agent: Python Pi Agent framework contract, unit, or integration coverage",
+  "live_llm: opt-in test that contacts a real LLM provider; requires RUN_LIVE_LLM_TESTS=1",
+  "real_provider: opt-in B02 smoke that may contact a paid external Provider; requires ALLOW_REAL_PROVIDER_SMOKE=1",
+  "slow: test with intentionally high runtime or resource use",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+force-exclude = true
+extend-exclude = [
+  "docs",
+]
+
+[tool.ruff.format]
+exclude = ["docs"]
+
+[tool.pyright]
+include = ["src"]
+typeCheckingMode = "basic"

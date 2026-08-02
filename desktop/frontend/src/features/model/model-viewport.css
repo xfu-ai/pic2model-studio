@@ -1,0 +1,27 @@
+.model-workspace{height:100%;min-height:0;overflow:auto;display:grid;grid-template-rows:auto minmax(420px,1fr) auto;gap:var(--space-3);padding:var(--space-5)}.model-workspace.has-generation-status,.model-workspace.has-model-status{grid-template-rows:auto auto minmax(420px,1fr) auto}.model-workspace header{display:flex;justify-content:space-between;align-items:center;gap:var(--space-4)}.model-workspace h1{margin:var(--space-0-5) 0;font-size:20px}.model-actions{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2)}.model-actions button{display:flex;gap:var(--space-1-5);align-items:center}.model-target{display:flex;align-items:center;gap:var(--space-1-25);color:var(--color-text-muted);font-size:12px}.model-target input{width:88px;padding:var(--space-1-5);border:var(--border-subtle);border-radius:6px;background:var(--color-surface-raised);color:var(--color-text)}.model-status-stack{display:grid;gap:var(--space-2)}.model-generation-status{margin:0;padding:var(--space-2) var(--space-3);border:var(--border-subtle);border-radius:8px;background:var(--color-surface-raised);color:var(--color-text);font-size:13px}.model-generation-error{border-color:var(--color-danger);color:var(--color-danger)}.model-workspace model-viewer{width:100%;height:100%;min-height:420px;border:var(--border-subtle);border-radius:12px;background:radial-gradient(circle at center,var(--color-border-strong),var(--color-canvas))}.model-placeholder{height:100%;min-height:420px;display:grid;place-content:center;text-align:center;gap:var(--space-3);border:1px dashed var(--color-border);border-radius:12px;color:var(--color-text-muted)}.model-hint{display:flex;gap:var(--space-1-5);align-items:center;margin:0;color:var(--color-text-muted);font-size:13px}
+.model-conversion-status{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);margin:0;padding:var(--space-2) var(--space-3);border:var(--border-subtle);border-radius:8px;background:var(--color-surface-raised);color:var(--color-text);font-size:13px}.model-conversion-status>button{display:inline-flex;align-items:center;gap:var(--space-1-5);flex:0 0 auto}.model-conversion-error{border-color:var(--color-danger);color:var(--color-danger)}.model-conversion-success{border-color:var(--color-accent)}.model-hint-error{color:var(--color-danger)}
+.model-actions button:disabled {
+  border-color: color-mix(in srgb, var(--color-border) 88%, transparent);
+  background: color-mix(in srgb, var(--color-surface-raised) 84%, var(--color-surface));
+  color: color-mix(in srgb, var(--color-text) 68%, var(--color-text-muted));
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 1;
+}
+.model-target input:disabled {
+  border-color: color-mix(in srgb, var(--color-border) 88%, transparent);
+  color: color-mix(in srgb, var(--color-text) 68%, var(--color-text-muted));
+  cursor: not-allowed;
+  opacity: 1;
+}
+.model-actions button.primary:not(:disabled) {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-primary-ink);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.model-actions button.primary:hover:not(:disabled) {
+  border-color: var(--color-accent-hover);
+  background: var(--color-accent-hover);
+  color: var(--color-primary-ink);
+}
