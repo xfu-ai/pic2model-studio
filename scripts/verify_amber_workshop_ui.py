@@ -222,7 +222,7 @@ def main() -> int:
         wait_for(
             connection,
             "document.readyState === 'complete' && !!document.querySelector('.workbench')",
-            "AIPicToModel workbench",
+            "FormWeaver Studio workbench",
             args.timeout,
         )
 

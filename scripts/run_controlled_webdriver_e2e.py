@@ -124,7 +124,7 @@ def assert_clean_runtime(driver: WebDriver, *, allow_failed_network: bool) -> No
 
 def run_startup(driver: WebDriver, timeout: float) -> None:
     wait_for(driver, "document.readyState === 'complete' && !!document.querySelector('main, .workbench-layout')", "application shell", timeout)
-    if driver.evaluate("return document.title;") != "AIPicToModel":
+    if driver.evaluate("return document.title;") != "FormWeaver Studio":
         raise AssertionError("unexpected document title")
     if driver.evaluate("return document.body.innerText.includes('本地服务暂时不可用');"):
         raise AssertionError("controlled sidecar did not reach a healthy state")

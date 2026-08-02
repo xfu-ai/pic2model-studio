@@ -15,7 +15,7 @@
 *.xml text eol=lf
 
 # Binary fixtures and runtime assets must never be normalized.
-*.aipicproject binary
+*.formweaver binary
 *.zip binary
 *.glb binary
 *.fbx binary

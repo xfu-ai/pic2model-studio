@@ -4,7 +4,7 @@ import { PromptImageWorkspace } from "./PromptImageWorkspace";
 
 function managedPromptDocument(zh: string, en: string) {
   return JSON.stringify({
-    schema: "aipic.prompt.v3",
+    schema: "formweaver.prompt.v1",
     analysis: { zh: `${zh}的分析`, en: `analysis of ${en}` },
     generation: { zh, en },
     constraints: { preserve: [], avoid: [] },

@@ -48,7 +48,7 @@ function Stop-ControlledWebViewHosts {
         (Join-Path $repoRoot ".local\controlled-webview2-target-"),
         (Join-Path $repoRoot ".local\webview2-core-e2e-target-")
     )
-    foreach ($process in @(Get-Process -Name "aipic-to-model" -ErrorAction SilentlyContinue)) {
+    foreach ($process in @(Get-Process -Name "formweaver-studio" -ErrorAction SilentlyContinue)) {
         $path = $process.Path
         if ($null -ne $path -and ($controlledRoots | Where-Object { $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) })) {
             # Kill the known controlled host and its sidecar descendants as a
@@ -93,7 +93,7 @@ try {
         app = @{
             windows = @(@{
                 label = "main"
-                title = "AIPicToModel controlled E2E"
+                title = "FormWeaver Studio controlled E2E"
                 width = 1280
                 height = 800
                 minWidth = 1024

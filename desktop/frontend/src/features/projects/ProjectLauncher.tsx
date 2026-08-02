@@ -48,10 +48,10 @@ export function ProjectLauncher({ api, host = new HostClient(), onProject }: { a
     } catch (reason) { setError(messageFor(reason)); } finally { setBusy(false); }
   };
   return <main className="project-launcher" aria-labelledby="project-launcher-title"><section className="project-launcher-card">
-    <p className="eyebrow">AIPicToModel</p><h1 id="project-launcher-title">Open a local project</h1>
+    <p className="eyebrow">FormWeaver Studio</p><h1 id="project-launcher-title">Open a local project</h1>
     <p className="project-launcher-intro">Choose a project folder through the desktop app. Its location stays private to the native host.</p>
     <div className="project-launcher-tabs" role="tablist" aria-label="Project action"><button role="tab" aria-selected={mode === "new"} onClick={() => setMode("new")}><Plus size={18} />New project</button><button role="tab" aria-selected={mode === "open"} onClick={() => setMode("open")}><FolderOpen size={18} />Open project</button></div>
-    {mode === "new" ? <NewProjectDialog name={name} busy={busy} onNameChange={setName} onCreate={() => void create()} /> : <><p className="project-launcher-help">Select a folder that contains a valid AIPicToModel project. Read-only or damaged projects remain unchanged if opening fails.</p><ProjectDirectoryPicker actionLabel="Choose project folder" disabled={busy} onChoose={() => void open()} /></>}
+    {mode === "new" ? <NewProjectDialog name={name} busy={busy} onNameChange={setName} onCreate={() => void create()} /> : <><p className="project-launcher-help">Select a folder that contains a valid FormWeaver Studio project. Read-only or damaged projects remain unchanged if opening fails.</p><ProjectDirectoryPicker actionLabel="Choose project folder" disabled={busy} onChoose={() => void open()} /></>}
     {error && <p className="project-launcher-error" role="alert"><WarningCircle size={18} />{error}</p>}
     <RecentProjectsPage projects={recents} busy={busy} onOpen={(recentProjectId) => void openRecent(recentProjectId)} />
   </section></main>;

@@ -37,7 +37,7 @@ def main() -> None:
         "--clean",
         "--onefile",
         "--name",
-        "aipic-to-model-sidecar",
+        "formweaver-sidecar",
         "--paths",
         str(source),
         "--collect-data",

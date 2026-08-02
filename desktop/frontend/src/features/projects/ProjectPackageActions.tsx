@@ -43,7 +43,7 @@ export function ProjectPackageActions({
       const fileName = typeof result.path === "string" ? result.path : null;
       setNotice({
         tone: "success",
-        text: `项目备份已导出为 ${fileName ?? ".aipicproject 文件"}，包含当前项目的图片、3D 模型和编辑设置，可在本应用中重新打开。`,
+        text: `项目备份已导出为 ${fileName ?? ".formweaver 文件"}，包含当前项目的图片、3D 模型和编辑设置，可在本应用中重新打开。`,
       });
     } catch {
       setNotice({
@@ -85,7 +85,7 @@ export function ProjectPackageActions({
         <section className="package-action-group" aria-labelledby="package-main">
           <h2 id="package-main">完整项目备份</h2>
           <p className="package-action-description">
-            将受管图片、模型和工作记录打包为 .aipicproject 文件，可在本应用中再次打开。
+            将受管图片、模型和工作记录打包为 .formweaver 文件，可在本应用中再次打开。
           </p>
           <div className="package-action-row package-main-action">
             <button

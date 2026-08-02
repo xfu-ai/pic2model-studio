@@ -46,8 +46,8 @@ function createDefaultPreviewModelGlb() {
   const gltf = {
     asset: {
       version: "2.0",
-      generator: "AIPicToModel procedural asset beacon",
-      copyright: "AIPicToModel project",
+      generator: "FormWeaver Studio procedural asset beacon",
+      copyright: "FormWeaver Studio project",
     },
     scene: 0,
     scenes: [{ name: "Asset Beacon Preview", nodes: [0] }],

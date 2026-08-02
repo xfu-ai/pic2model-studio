@@ -1,4 +1,4 @@
-# AIPicToModel contribution and validation guide
+# FormWeaver Studio contribution and validation guide
 
 The canonical validation runbook is [docs/controlled-validation.md](docs/controlled-validation.md).
 Use this file for the short rules that apply to every change.
@@ -71,7 +71,7 @@ native dialogs.
 ```
 
 Before every application or controlled-E2E start/restart, resolve and stop all
-existing **AIPicToModel-owned** Tauri, `aipic-to-model`, Python sidecar, and
+existing **FormWeaver Studio-owned** Tauri, `formweaver-studio`, Python sidecar, and
 Vite processes. Verify each exact command line belongs to this workspace or
 its controlled/live evidence directory before stopping it; never terminate an
 unrelated process. A startup or validation failure is blocking: retain its

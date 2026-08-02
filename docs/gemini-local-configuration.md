@@ -19,7 +19,7 @@
 - 本机配置：`.local/gemini.local.json`
 - 可提交示例：`.local/gemini.example.json`
 - Google API Key：Windows 安全凭据
-- 凭据服务：`AIPicToModel`
+- 凭据服务：`FormWeaver Studio`
 - 凭据引用：`gemini/google/default`
 - 可选 Xais 配置：`.local/xais-nanobanana.local.json`
 

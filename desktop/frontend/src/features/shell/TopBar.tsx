@@ -29,9 +29,9 @@ export function TopBar({
   return (
     <header className="workbench-topbar">
       <div className="topbar-brand-row">
-        <div className="topbar-brand" aria-label="AIPicToModel">
+        <div className="topbar-brand" aria-label="FormWeaver Studio">
           <span className="topbar-brand-mark" aria-hidden="true" />
-          <strong>AIPicToModel</strong>
+          <strong>FormWeaver Studio</strong>
         </div>
         <div className="topbar-actions">
           <span className="save-state">

@@ -168,7 +168,7 @@ def test_b01_11_export_replay_does_not_require_an_unconsumed_capability(tmp_path
     second = client.post(f"/v1/projects/{project['id']}/export", json=body, headers=export_headers)
     assert first.status_code == second.status_code == 200
     assert second.json() == first.json()
-    assert (export_directory / "Demo-backup.aipicproject").is_file()
+    assert (export_directory / "Demo-backup.formweaver").is_file()
 
 
 def test_b01_11_openapi_and_validation_use_the_same_local_security_contract():
@@ -242,8 +242,8 @@ def test_b01_11_diagnostics_export_writes_zip_inside_authorized_folder(tmp_path:
         headers=export_headers,
     )
     assert exported.status_code == 200
-    assert exported.json()["path"] == "AIPicToModel-diagnostics.zip"
-    assert (destination / "AIPicToModel-diagnostics.zip").is_file()
+    assert exported.json()["path"] == "FormWeaver-Studio-diagnostics.zip"
+    assert (destination / "FormWeaver-Studio-diagnostics.zip").is_file()
 
 
 def test_b01_11_header_request_id_must_bind_body_request_id(tmp_path: Path):

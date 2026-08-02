@@ -24,7 +24,7 @@ def _png() -> bytes:
 
 def _prompt_json(zh: str, en: str) -> str:
     return json.dumps({
-        "schema": "aipic.prompt.v3",
+        "schema": "formweaver.prompt.v1",
         "analysis": {"zh": f"{zh}的可见特征", "en": f"visible characteristics of {en}"},
         "generation": {"zh": zh, "en": en},
         "constraints": {"preserve": [en], "avoid": ["text"]},
@@ -97,7 +97,7 @@ def test_gemini_vision_analysis_uses_inline_managed_image() -> None:
         assert "subject identity and count" in system
         assert "identity-critical details" in system
         assert "separate visual-direction reference" in system
-        assert "aipic.prompt.v3" in system
+        assert "formweaver.prompt.v1" in system
         return httpx.Response(
             200,
             json={
@@ -219,7 +219,7 @@ def test_gemini_rewrite_requires_and_accepts_strict_bilingual_response() -> None
     request_text = payload["contents"][0]["parts"][0]["text"]
     assert "Existing prompt document:" in request_text
     assert "Requested change:\nUse a white background." in request_text
-    assert "aipic.prompt.v3" in payload["systemInstruction"]["parts"][0]["text"]
+    assert "formweaver.prompt.v1" in payload["systemInstruction"]["parts"][0]["text"]
 
 
 def test_gemini_rewrite_rejects_non_bilingual_response() -> None:

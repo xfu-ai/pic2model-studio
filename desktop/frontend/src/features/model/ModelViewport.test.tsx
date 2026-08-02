@@ -46,7 +46,7 @@ describe("ModelViewport", () => {
     expect(view.getUint32(4, true)).toBe(2);
     const jsonLength = view.getUint32(12, true);
     const json = JSON.parse(new TextDecoder().decode(bytes.slice(20, 20 + jsonLength)).trim());
-    expect(json.asset.generator).toBe("AIPicToModel procedural asset beacon");
+    expect(json.asset.generator).toBe("FormWeaver Studio procedural asset beacon");
     expect(json.nodes).toHaveLength(10);
     expect(json.materials.map((item: { name: string }) => item.name)).toEqual([
       "Amber Alloy",

@@ -63,7 +63,7 @@ def run_startup(connection: CdpConnection, timeout: float) -> None:
         timeout,
     )
     title = connection.evaluate("document.title")
-    if title != "AIPicToModel":
+    if title != "FormWeaver Studio":
         raise AssertionError(f"unexpected page title: {title!r}")
     offline = connection.evaluate("document.body.innerText.includes('本地服务暂时不可用')")
     if offline:

@@ -80,7 +80,7 @@ function ShellContent() {
   if (state === "ready" && project && api) return <PanelLayout state={workspace} projectId={project.id} projectName={project.name} readOnly={project.root_state === "read_only"} project={project} api={api} onProject={activateProject} onPatch={patchWorkspace} />;
   if (state === "ready") return <PanelLayout state={workspace} projectName="尚未打开项目" readOnly={false} onPatch={patchWorkspace} />;
   return <main className="app-shell">
-    <header className="boot-topbar"><div className="brand-mark" aria-hidden="true" /><strong>AIPicToModel</strong><span className="boot-caption">桌面工作台</span></header>
+    <header className="boot-topbar"><div className="brand-mark" aria-hidden="true" /><strong>FormWeaver Studio</strong><span className="boot-caption">桌面工作台</span></header>
     <section className="boot-content" aria-live="polite">
       {state === "loading" && <><CircleNotch size={28} aria-hidden="true" className="spin" /><h1>正在连接本地工作台</h1><p>正在验证受保护的本地服务。</p></>}
       {state === "offline" && <><CloudSlash size={28} aria-hidden="true" className="warning" /><h1>本地服务暂时不可用</h1><p>你仍可查看已打开的本地内容。需要服务的操作将在恢复后继续可用。</p><button className="primary" onClick={() => { setState("loading"); setConnectionAttempt((attempt) => attempt + 1); }}>重新连接</button></>}

@@ -4,7 +4,7 @@ import type { ApiClient, AssetDto, ReferenceContextState, ToolResultDto, Workspa
 import { parseManagedPrompt, promptPair } from "../../shared/prompts/promptDocument";
 
 const visionProfile = "gemini/google/default";
-const visionModel = import.meta.env.VITE_AIPICTOMODEL_ANALYSIS_MODEL || "gemini-flash-lite-latest";
+const visionModel = import.meta.env.VITE_FORMWEAVER_ANALYSIS_MODEL || "gemini-flash-lite-latest";
 const imageProfile = "image-generation/auto";
 const imageModel = "auto";
 

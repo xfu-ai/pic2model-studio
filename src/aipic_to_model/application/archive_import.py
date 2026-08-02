@@ -16,7 +16,7 @@ from .ports import FilesystemPort, PackageRepositoryPort
 
 
 class ProjectPackageService:
-    _IMPORT_OWNER = ".aipic-import-owner.json"
+    _IMPORT_OWNER = ".formweaver-import-owner.json"
 
     def __init__(
         self,
@@ -150,7 +150,7 @@ class ProjectPackageService:
             item["size_bytes"] = path.stat().st_size
             assets.append(item)
         manifest = {
-            "format": "AIPicToModelProject",
+            "format": "FormWeaverProject",
             "format_version": 1,
             "project": project,
             "assets": assets,
@@ -172,7 +172,7 @@ class ProjectPackageService:
             with zipfile.ZipFile(temporary) as archive:
                 self._filesystem.validate_zip(archive)
                 returned = json.loads(archive.read("manifest.json"))
-            if returned["format"] != "AIPicToModelProject":
+            if returned["format"] != "FormWeaverProject":
                 raise DomainErrorV1(ErrorCode.INVALID_ARCHIVE, "导出包验证失败。")
             try:
                 if overwrite:
@@ -216,7 +216,7 @@ class ProjectPackageService:
         except (OSError, KeyError, zipfile.BadZipFile, json.JSONDecodeError) as error:
             raise DomainErrorV1(ErrorCode.INVALID_ARCHIVE, "项目包无效。") from error
         if (
-            manifest.get("format") != "AIPicToModelProject"
+            manifest.get("format") != "FormWeaverProject"
             or manifest.get("format_version") != 1
             or manifest.get("project", {}).get("root_path") != "."
         ):

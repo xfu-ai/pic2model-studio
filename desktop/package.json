@@ -1,5 +1,5 @@
 {
-  "name": "aipic-to-model-desktop",
+  "name": "formweaver-studio-desktop",
   "private": true,
   "packageManager": "pnpm@10.15.0",
   "scripts": {
@@ -10,6 +10,6 @@
     "tauri": "tauri"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.9.5"
+    "@tauri-apps/cli": "2.11.4"
   }
 }

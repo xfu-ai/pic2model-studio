@@ -1,6 +1,6 @@
 # Python Agent Runtime
 
-This is the operational specification for AIPicToModel's Python Pi Agent
+This is the operational specification for FormWeaver Studio's Python Pi Agent
 runtime. ADR-0012 records the architectural decision; the migration ledger and
 phase evidence record verification. The historical B03 decision-envelope
 runtime is not an implementation contract.

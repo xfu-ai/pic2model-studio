@@ -4,7 +4,7 @@
 
 ```text
 Use case: ui-mockup
-Asset type: production-feasible AIPicToModel desktop application visual direction
+Asset type: production-feasible FormWeaver Studio desktop application visual direction
 Target dimensions: 1600 × 900 landscape
 
 Use the approved Amber Workshop image as the authoritative global style and shell

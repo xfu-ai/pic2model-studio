@@ -12,7 +12,7 @@ const rewriteModel = "gemini-flash-lite-latest";
 const rewriteInstruction = [
   "Refine the generation description without changing the depicted subject or stated restrictions.",
   "Make composition, visible construction, materials, lighting, and spatial relationships more actionable, but do not invent unrelated content.",
-  "Return the complete aipic.prompt.v3 JSON document with equivalent natural Chinese and English fields and retained preserve/avoid constraints.",
+  "Return the complete formweaver.prompt.v1 JSON document with equivalent natural Chinese and English fields and retained preserve/avoid constraints.",
 ].join(" ");
 
 type PromptLanguage = "zh" | "en";

@@ -72,7 +72,7 @@ describe("AssetBrowser", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard });
     const promptContent = "A stylized 3D character.\nNeutral pose, full body.";
     const prompt = JSON.stringify({
-      schema: "aipic.prompt.v3",
+      schema: "formweaver.prompt.v1",
       analysis: { zh: "角色分析", en: "character analysis" },
       generation: { zh: promptContent, en: promptContent },
       constraints: { preserve: ["full body"], avoid: ["text"] },

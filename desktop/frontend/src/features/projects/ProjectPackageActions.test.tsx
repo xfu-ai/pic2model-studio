@@ -7,11 +7,11 @@ describe("ProjectPackageActions", () => {
   afterEach(() => document.body.replaceChildren());
   it("exports through a project-bound native capability without forwarding a path", async () => {
     const host = { chooseExportDirectory: vi.fn().mockResolvedValue("export-capability") };
-    const api = { exportProject: vi.fn().mockResolvedValue({ path: "Demo-backup.aipicproject" }) };
+    const api = { exportProject: vi.fn().mockResolvedValue({ path: "Demo-backup.formweaver" }) };
     render(<ProjectPackageActions project={project} host={host as never} api={api as never} onProject={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "导出项目备份…" }));
     await waitFor(() => expect(api.exportProject).toHaveBeenCalledWith("project-1", "export-capability", expect.stringMatching(/^package-/)));
-    expect(await screen.findByRole("status")).toHaveTextContent("Demo-backup.aipicproject");
+    expect(await screen.findByRole("status")).toHaveTextContent("Demo-backup.formweaver");
     expect(JSON.stringify(api.exportProject.mock.calls)).not.toContain(":\\\\");
   });
 
@@ -37,8 +37,8 @@ describe("ProjectPackageActions", () => {
     await waitFor(() => expect(api.exportProject).toHaveBeenCalled());
     expect(screen.getByRole("status")).toHaveTextContent("正在导出项目备份，请稍候…");
 
-    finishExport({ path: "Demo-backup.aipicproject" });
-    expect(await screen.findByRole("status")).toHaveTextContent("Demo-backup.aipicproject");
+    finishExport({ path: "Demo-backup.formweaver" });
+    expect(await screen.findByRole("status")).toHaveTextContent("Demo-backup.formweaver");
   });
 
   it("explains that a failed backup does not move the current project", async () => {

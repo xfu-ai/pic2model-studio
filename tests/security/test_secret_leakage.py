@@ -15,10 +15,10 @@ from aipic_to_model.infrastructure.sqlite.connection import connect
 
 def test_b01_09_logs_and_diagnostics_redact_secret_and_absolute_path(tmp_path: Path):
     append_log(tmp_path, "app", "Authorization: Bearer sentinel-secret C:\\Users\\private")
-    prepared = preview(tmp_path, {"name": "AIPicToModel", "version": "0.1.0"})
+    prepared = preview(tmp_path, {"name": "FormWeaver Studio", "version": "0.1.0"})
     output = tmp_path / "diagnostics.zip"
     export(
-        tmp_path, output, prepared["manifest_hash"], {"name": "AIPicToModel", "version": "0.1.0"}
+        tmp_path, output, prepared["manifest_hash"], {"name": "FormWeaver Studio", "version": "0.1.0"}
     )
     assert "sentinel-secret" not in (tmp_path / "logs" / "app.log").read_text(encoding="utf-8")
     assert b"sentinel-secret" not in output.read_bytes()
