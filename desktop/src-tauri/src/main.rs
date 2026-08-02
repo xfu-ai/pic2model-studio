@@ -1045,11 +1045,13 @@ fn main() {
                     .ok()
                     .as_deref()
                     == Some("1");
-            // Prefer the workspace Python source whenever it is present so
-            // normal development runs and controlled E2E exercise the same
-            // Sidecar code. Packaged builds without that source tree retain
-            // the bundled executable as their fallback.
-            let sidecar = if controlled_e2e || force_workspace_python || workspace_source_available {
+            // Debug and controlled runs exercise the workspace Python source.
+            // Release builds always prefer the bundled sidecar so a portable
+            // copy cannot accidentally depend on a developer workstation.
+            let sidecar = if controlled_e2e
+                || force_workspace_python
+                || (cfg!(debug_assertions) && workspace_source_available)
+            {
                 SidecarState::launch_python(provider_compatible_python(), app_db)
             } else if let Some(binary) =
                 configured_binary.or_else(|| packaged_binary.is_file().then_some(packaged_binary))

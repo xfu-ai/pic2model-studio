@@ -4,7 +4,21 @@ AIPicToModel is a Windows desktop workbench for turning image concepts into
 managed 3D-production assets. The desktop shell is built with Tauri and React;
 the local sidecar is implemented in Python.
 
-## Requirements
+## Run the portable application
+
+After cloning with Git LFS enabled, open:
+
+```text
+portable\AIPicToModel\aipic-to-model.exe
+```
+
+The portable directory contains the desktop executable and the packaged Python
+sidecar. The sidecar embeds its Python runtime, Python packages, ONNX Runtime
+native libraries, and the bundled Real-ESRGAN model. Python, Node.js, and Rust
+are not required to run the portable build. Windows WebView2 is an operating
+system prerequisite. Blender is optional and is used only for local FBX export.
+
+## Development requirements
 
 - Windows 10 or later with WebView2
 - Python 3.14
@@ -29,16 +43,17 @@ The controlled validation suite uses only offline fixtures and mock providers.
 .\scripts\run_controlled_validation.ps1
 ```
 
-## Build
+## Build the portable application
 
-Build the Python sidecar and frontend, then create the Tauri bundle:
+The repository does not publish an installer. Rebuild the directly runnable
+portable directory with:
 
 ```powershell
-pnpm --dir desktop install
-pnpm --dir desktop/frontend install
-pnpm --dir desktop build
-pnpm --dir desktop tauri build
+.\scripts\build_portable.ps1
 ```
+
+The script packages the sidecar, builds Tauri with `--no-bundle`, recreates
+`portable\AIPicToModel`, and writes `SHA256SUMS.txt` for all shipped files.
 
 Real provider smoke tests are opt-in and require the explicit safety flags
 documented in `AGENTS.md` and `docs/controlled-validation.md`.

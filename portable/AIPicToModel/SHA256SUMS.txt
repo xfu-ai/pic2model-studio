@@ -1,0 +1,4 @@
+904493fa88f625fd911221426338835e5986704dd6ae4d219e71d3bc3f54dab4  aipic-to-model.exe
+c9665e715ae2dca65891990895dfa9d12c71b50eb1793ade00fb40f3d286aa17  BUNDLED_COMPONENTS.txt
+6b172f6d78c0f11ae4f7b84daa3e7a6d0a085b99842f27271073f4f27426bec6  resources/sidecar/aipic-to-model-sidecar.exe
+b02412dbb724d542528780025be26996317bdf21bef022e54458605c5d70c602  resources/sidecar/README.txt
