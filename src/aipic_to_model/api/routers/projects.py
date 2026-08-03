@@ -116,7 +116,7 @@ def build_project_router(
             )
         project = dependencies.projects.open(root)
         destination = _export_file_in_directory(
-            destination_directory, project.name, ".formweaver"
+            destination_directory, project.name, ".pic2model"
         )
         return dependencies.packages.export_v1(
             root,

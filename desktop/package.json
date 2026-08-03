@@ -1,5 +1,5 @@
 {
-  "name": "formweaver-studio-desktop",
+  "name": "pic2model-studio-desktop",
   "private": true,
   "packageManager": "pnpm@10.15.0",
   "scripts": {

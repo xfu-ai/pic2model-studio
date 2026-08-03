@@ -192,7 +192,7 @@ async fn choose_file_capability(
     let mut dialog = app
         .dialog()
         .file()
-        .set_title("Select an image for FormWeaver Studio")
+        .set_title("为图模工坊选择图片")
         .add_filter("Images", &["png", "jpg", "jpeg", "bmp", "webp"]);
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
@@ -491,7 +491,7 @@ fn get_or_create_screen_capture_overlay(
         overlay_builder = overlay_builder.additional_browser_args(browser_args);
     }
     overlay_builder
-        .title("FormWeaver Studio screen capture")
+        .title("图模工坊屏幕截图")
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
@@ -588,7 +588,7 @@ async fn capture_screen_capability(
         let height =
             u32::try_from(max_y - min_y).map_err(|_| "Invalid display geometry.".to_string())?;
         let staging = std::env::temp_dir()
-            .join("FormWeaver Studio")
+            .join("Pic2Model Studio")
             .join("screenshots");
         std::fs::create_dir_all(&staging)
             .map_err(|_| "The screenshot could not be prepared.".to_string())?;
@@ -789,7 +789,7 @@ fn notify_job_terminal(app: tauri::AppHandle, status: String) -> Result<(), Stri
     };
     app.notification()
         .builder()
-        .title("FormWeaver Studio")
+        .title("图模工坊")
         .body(body)
         .show()
         .map_err(|_| "The desktop notification could not be shown.".to_string())
@@ -872,7 +872,7 @@ fn write_preview_response(stream: &mut std::net::TcpStream, content_type: &str, 
 }
 
 fn preview_html() -> &'static str {
-    r#"<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FormWeaver Studio model preview</title><style>html,body,model-viewer{width:100%;height:100%;margin:0;background:#111827}model-viewer{--poster-color:#111827}</style><script type="module" src="./model-viewer.min.js"></script><model-viewer src="./model.glb" camera-controls auto-rotate shadow-intensity="1" exposure="1" alt="3D model"></model-viewer></html>"#
+    r#"<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>图模工坊模型预览</title><style>html,body,model-viewer{width:100%;height:100%;margin:0;background:#111827}model-viewer{--poster-color:#111827}</style><script type="module" src="./model-viewer.min.js"></script><model-viewer src="./model.glb" camera-controls auto-rotate shadow-intensity="1" exposure="1" alt="3D model"></model-viewer></html>"#
 }
 
 /// The webview supplies file bytes, never a local path. The host creates a private
@@ -909,7 +909,7 @@ fn stage_dropped_file(
         return Err("Only PNG, JPG, BMP, WEBP, or GLB files can be dropped here.".to_string());
     }
     let staging = std::env::temp_dir()
-        .join("FormWeaver Studio")
+        .join("Pic2Model Studio")
         .join("drop-staging");
     std::fs::create_dir_all(&staging)
         .map_err(|_| "The dropped file could not be prepared.".to_string())?;
@@ -992,9 +992,9 @@ fn main() {
                 && std::env::var("AIPIC_CONTROLLED_E2E").ok().as_deref() == Some("1");
             if let Some(window) = app.get_webview_window("main") {
                 window.set_title(if controlled_e2e {
-                    "FormWeaver Studio controlled E2E"
+                    "Pic2Model Studio controlled E2E"
                 } else {
-                    "FormWeaver Studio"
+                    "图模工坊"
                 })?;
             }
             let app_data = if cfg!(debug_assertions)
@@ -1028,9 +1028,9 @@ fn main() {
             let packaged_binary = resource_file(
                 Path::new("sidecar")
                     .join(if cfg!(windows) {
-                        "formweaver-sidecar.exe"
+                        "pic2model-sidecar.exe"
                     } else {
-                        "formweaver-sidecar"
+                        "pic2model-sidecar"
                     })
                     .as_path(),
             );
@@ -1067,13 +1067,13 @@ fn main() {
             // desktop copy instead of a new browser process.
             let _ = get_or_create_screen_capture_overlay(app.handle());
             let tray_menu = MenuBuilder::new(app)
-                .text("show", "Show FormWeaver Studio")
+                .text("show", "显示图模工坊")
                 .separator()
                 .text("quit", "Quit")
                 .build()?;
             let mut tray = TrayIconBuilder::with_id("main")
                 .menu(&tray_menu)
-                .tooltip("FormWeaver Studio")
+                .tooltip("图模工坊")
                 .show_menu_on_left_click(false);
             if let Some(icon) = app.default_window_icon().cloned() {
                 tray = tray.icon(icon);

@@ -1,6 +1,6 @@
 # Portable application
 
-Double-click `FormWeaver-Studio\formweaver-studio.exe` to run the application. Keep the
+Double-click `Pic2Model-Studio\pic2model-studio.exe` to run the application. Keep the
 `resources` directory beside the executable; it contains the self-contained
 Python sidecar used by the desktop host.
 

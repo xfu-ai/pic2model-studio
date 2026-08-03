@@ -29,9 +29,9 @@ export function TopBar({
   return (
     <header className="workbench-topbar">
       <div className="topbar-brand-row">
-        <div className="topbar-brand" aria-label="FormWeaver Studio">
+        <div className="topbar-brand" aria-label="图模工坊">
           <span className="topbar-brand-mark" aria-hidden="true" />
-          <strong>FormWeaver Studio</strong>
+          <strong>图模工坊</strong>
         </div>
         <div className="topbar-actions">
           <span className="save-state">

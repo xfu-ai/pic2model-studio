@@ -23,7 +23,7 @@ def _png_base64() -> str:
 
 def _prompt_json(zh: str, en: str) -> str:
     return json.dumps({
-        "schema": "formweaver.prompt.v1",
+        "schema": "pic2model.prompt.v1",
         "analysis": {"zh": f"{zh}的可见特征", "en": f"visible characteristics of {en}"},
         "generation": {"zh": zh, "en": en},
         "constraints": {"preserve": [en], "avoid": ["text"]},

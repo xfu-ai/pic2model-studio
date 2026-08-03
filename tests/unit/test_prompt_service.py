@@ -38,7 +38,7 @@ def test_strict_bilingual_parse_and_versioned_merge() -> None:
     [
         "## ZH\nonly",
         "{}",
-        '{"schema":"formweaver.prompt.v1","analysis":{},"generation":{},"constraints":{}}',
+        '{"schema":"pic2model.prompt.v1","analysis":{},"generation":{},"constraints":{}}',
     ],
 )
 def test_malformed_bilingual_responses_are_rejected(response: str) -> None:

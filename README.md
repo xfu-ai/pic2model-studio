@@ -1,8 +1,8 @@
-# FormWeaver Studio（织形工坊）
+# 图模工坊（Pic2Model Studio）
 
 > 从图像灵感到可交付 3D 资产的本地 AI 创作工作台。
 
-FormWeaver Studio 把提示词整理、图片方案生成、目标提取、多视图制作、
+图模工坊把提示词整理、图片方案生成、目标提取、多视图制作、
 3D 生成、模型预览与格式转换组织在同一个桌面项目中。创作者可以从任意
 已有图片或 GLB 模型进入，不必按固定顺序完成整条流程。
 
@@ -28,7 +28,7 @@ git lfs pull
 然后双击：
 
 ```text
-portable\FormWeaver-Studio\formweaver-studio.exe
+portable\Pic2Model-Studio\pic2model-studio.exe
 ```
 
 便携版已内嵌 Python 3.14、Python 包、ONNX Runtime 原生库、Visual C++
@@ -92,7 +92,7 @@ release，并生成完整 SHA-256 清单：
 .\scripts\build_portable.ps1
 ```
 
-输出目录：`portable\FormWeaver-Studio`。
+输出目录：`portable\Pic2Model-Studio`。
 
 ## 验证
 

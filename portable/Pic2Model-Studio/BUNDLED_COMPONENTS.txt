@@ -1,6 +1,6 @@
-FormWeaver Studio portable runtime components
+Pic2Model Studio portable runtime components
 
-resources/sidecar/formweaver-sidecar.exe is a PyInstaller one-file archive.
+resources/sidecar/pic2model-sidecar.exe is a PyInstaller one-file archive.
 It embeds these required model and native runtime components:
 
 - aipic_to_model/resources/image_processing/models/realesrgan-x4.onnx

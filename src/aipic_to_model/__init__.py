@@ -1,4 +1,4 @@
-"""Local, recoverable FormWeaver Studio application core.
+"""Local, recoverable Pic2Model Studio application core.
 
 Use :func:`aipic_to_model.composition.compose_local_app` to construct the
 application.  Importing this package never selects infrastructure or mutates

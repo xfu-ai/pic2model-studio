@@ -44,7 +44,7 @@ def test_b01_12_local_lifecycle_e2e_without_network_or_provider(tmp_path: Path):
     assert trashed["trashed_at"]
     restored = assets.restore_from_trash(root, project.id, derived["id"], "restore")
     assert restored["trashed_at"] is None
-    package = tmp_path / "e2e.formweaver"
+    package = tmp_path / "e2e.pic2model"
     exported = ProjectPackageService().export_v1(root, package)
     imported_package = ProjectPackageService().import_v1(package, tmp_path / "imported")
     assert exported["asset_count"] == imported_package["asset_count"]

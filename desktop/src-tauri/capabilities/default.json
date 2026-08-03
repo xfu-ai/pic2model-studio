@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "Minimal native capabilities for the FormWeaver Studio main window.",
+  "description": "Minimal native capabilities for the Pic2Model Studio main window.",
   "windows": ["main"],
   "permissions": [
     "core:default",

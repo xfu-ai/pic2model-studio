@@ -1,4 +1,4 @@
-"""Structured, versioned prompt documents for the FormWeaver Studio workflow."""
+"""Structured, versioned prompt documents for the Pic2Model Studio workflow."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 
 PARSER_VERSION = 3
-PROMPT_SCHEMA = "formweaver.prompt.v1"
+PROMPT_SCHEMA = "pic2model.prompt.v1"
 
 
 class PromptParseError(ValueError):
@@ -41,7 +41,7 @@ def _string_list(value: object, field: str) -> tuple[str, ...]:
 
 
 def parse_bilingual(response: str) -> BilingualPrompt:
-    """Parse the strict ``formweaver.prompt.v1`` JSON contract.
+    """Parse the strict ``pic2model.prompt.v1`` JSON contract.
 
     The historical Markdown wire format is intentionally unsupported. Provider
     responses, managed Prompt assets, and rewrite results all use one schema.

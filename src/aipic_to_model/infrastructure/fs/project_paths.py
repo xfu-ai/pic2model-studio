@@ -43,7 +43,7 @@ def managed_path(root: Path, relative_path: str) -> Path:
 
 def require_writable_root(root: Path) -> None:
     """Prove a project root accepts writes before a command changes its state."""
-    probe = root / f".formweaver-write-probe-{os.getpid()}-{secrets.token_hex(8)}"
+    probe = root / f".pic2model-write-probe-{os.getpid()}-{secrets.token_hex(8)}"
     try:
         with probe.open("xb") as stream:
             stream.write(b"probe")

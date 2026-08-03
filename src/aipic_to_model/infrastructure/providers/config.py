@@ -252,8 +252,8 @@ def load_openai_public_settings(path: Path | None = None) -> OpenAICompatibleSet
     except OSError, ValueError:
         pass
     base_url = os.environ.get("OPENAI_BASE_URL") or data.get("openai_base_url")
-    analysis_model = os.environ.get("FORMWEAVER_ANALYSIS_MODEL") or data.get("analysis_model")
-    image_model = os.environ.get("FORMWEAVER_IMAGE_MODEL") or data.get("image_model")
+    analysis_model = os.environ.get("PIC2MODEL_ANALYSIS_MODEL") or data.get("analysis_model")
+    image_model = os.environ.get("PIC2MODEL_IMAGE_MODEL") or data.get("image_model")
     resolved_base = str(base_url or "https://api.openai.com/v1")
     default_image_model = (
         "gpt-image-2" if urlparse(resolved_base).hostname == "api.openai.com" else "gpt-image-2-r1"

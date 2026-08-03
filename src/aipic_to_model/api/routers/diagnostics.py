@@ -31,7 +31,7 @@ def build_diagnostics_router(guard: OriginGuard, dependencies: AppDependencies) 
             )
         return dependencies.diagnostics.export(
             dependencies.root_for(body.project_id),
-            destination / "FormWeaver-Studio-diagnostics.zip",
+            destination / "Pic2Model-Studio-diagnostics.zip",
             body.confirmed_manifest_hash,
             about(),
         )

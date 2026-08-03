@@ -3,7 +3,7 @@ from __future__ import annotations
 import keyring
 from keyring.errors import PasswordDeleteError
 
-SERVICE_NAME = "FormWeaver Studio"
+SERVICE_NAME = "Pic2Model Studio"
 
 
 class OSKeyringStore:

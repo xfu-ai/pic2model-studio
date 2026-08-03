@@ -4,7 +4,7 @@ from __future__ import annotations
 
 _JSON_CONTRACT = """Return JSON only with this exact shape:
 {
-  "schema": "formweaver.prompt.v1",
+  "schema": "pic2model.prompt.v1",
   "analysis": {"zh": "...", "en": "..."},
   "generation": {"zh": "...", "en": "..."},
   "constraints": {"preserve": ["..."], "avoid": ["..."]}

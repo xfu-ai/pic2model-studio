@@ -24,7 +24,7 @@ def _startup_stage(stage: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="FormWeaver Studio desktop sidecar")
+    parser = argparse.ArgumentParser(description="Pic2Model Studio desktop sidecar")
     parser.add_argument("--app-db", required=True)
     return parser.parse_args()
 

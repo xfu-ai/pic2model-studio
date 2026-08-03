@@ -9,7 +9,7 @@ describe("DiagnosticsPanel", () => {
     const host = { chooseDiagnosticsExportDirectory: vi.fn().mockResolvedValue("diagnostic-capability") };
     const api = {
       diagnosticsPreview: vi.fn().mockResolvedValue({
-        manifest: { build: { name: "FormWeaver Studio" }, files: [{ name: "app.log", size: 256 }] },
+        manifest: { build: { name: "图模工坊" }, files: [{ name: "app.log", size: 256 }] },
         manifest_hash: "manifest-sha256",
         estimated_size: 256,
       }),

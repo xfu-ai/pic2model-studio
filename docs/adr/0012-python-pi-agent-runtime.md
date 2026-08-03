@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-07-25
-- Decision owner: FormWeaver Studio
+- Decision owner: Pic2Model Studio
 - Source baseline: Pi `8eef62ed3ea62d646a7fad92fa583fc8d71fec17`
 
 ## Context

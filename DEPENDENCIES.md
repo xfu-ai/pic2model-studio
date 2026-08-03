@@ -1,11 +1,11 @@
-# FormWeaver Studio dependencies
+# 图模工坊（Pic2Model Studio）依赖说明
 
 本文件说明仓库中依赖的来源、用途以及便携版的封装边界。精确版本以
 `uv.lock`、两个 `pnpm-lock.yaml` 和 `desktop/src-tauri/Cargo.lock` 为准。
 
 ## 便携版内嵌运行时
 
-运行 `portable\FormWeaver-Studio\formweaver-studio.exe` 不需要单独安装以下
+运行 `portable\Pic2Model-Studio\pic2model-studio.exe` 不需要单独安装以下
 组件：
 
 | 组件 | 用途 | 分发方式 |

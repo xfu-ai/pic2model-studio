@@ -25,7 +25,7 @@ class ProjectService:
 
     @staticmethod
     def _root_state(root: Path) -> str:
-        probe = root / ".formweaver-write-probe"
+        probe = root / ".pic2model-write-probe"
         try:
             with probe.open("xb") as stream:
                 stream.write(b"probe")

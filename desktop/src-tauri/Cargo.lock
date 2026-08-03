@@ -1170,25 +1170,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "formweaver-studio"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "image",
- "rand",
- "screenshots",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "thiserror 2.0.19",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "futures-channel"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2752,6 +2733,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e57fef6bc5981e38c2ce2d63bfa546861309f875b8a75f092d1d54ae2d64f266"
 dependencies = [
  "siphasher",
+]
+
+[[package]]
+name = "pic2model-studio"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "image",
+ "rand",
+ "screenshots",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "thiserror 2.0.19",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -84,7 +84,7 @@ class KeyringCredentialStore(CredentialStore):
     """
 
     def __init__(
-        self, service_name: str = "formweaver-studio.agent", backend: KeyringBackend | None = None
+        self, service_name: str = "pic2model-studio.agent", backend: KeyringBackend | None = None
     ) -> None:
         if backend is None:
             import keyring

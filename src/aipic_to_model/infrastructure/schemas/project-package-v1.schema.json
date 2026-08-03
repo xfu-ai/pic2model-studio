@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["format", "format_version", "project", "assets", "asset_links", "selections", "decisions", "exported_at"],
   "properties": {
-    "format": {"const": "FormWeaverProject"},
+    "format": {"const": "Pic2ModelProject"},
     "format_version": {"const": 1},
     "exported_at": {"type": "string", "minLength": 1},
     "project": {"type": "object", "additionalProperties": true, "required": ["id", "name", "root_path", "created_at", "updated_at"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "root_path": {"const": "."}, "created_at": {"type": "string"}, "updated_at": {"type": "string"}}},

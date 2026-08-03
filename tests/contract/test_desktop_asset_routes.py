@@ -136,7 +136,7 @@ def test_desktop_package_export_uses_project_bound_capability(tmp_path: Path) ->
     project_id = created.json()["id"]
     export_directory = tmp_path / "exports"
     export_directory.mkdir()
-    package = export_directory / "Demo-backup.formweaver"
+    package = export_directory / "Demo-backup.pic2model"
     package.write_bytes(b"previous backup")
     exported = client.post(
         f"/v1/projects/{project_id}/export", headers={**headers, "X-Request-Id": "project-export"},

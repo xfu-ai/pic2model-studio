@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "FormWeaver Studio",
+  "productName": "图模工坊",
   "version": "0.1.0",
-  "identifier": "studio.formweaver.desktop",
+  "identifier": "studio.pic2model.desktop",
   "build": {
     "beforeDevCommand": "pnpm --dir frontend dev --host 127.0.0.1 --port 14200 --strictPort",
     "beforeBuildCommand": "pnpm run build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "FormWeaver Studio",
+        "title": "图模工坊",
         "width": 1440,
         "height": 900,
         "minWidth": 1024,

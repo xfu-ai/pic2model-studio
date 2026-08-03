@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-APP_NAME = "FormWeaver Studio"
+APP_NAME = "图模工坊"
 APP_VERSION = "0.1.0"
 
 

@@ -30,7 +30,7 @@ $tauriDriverManifestPath = if ($TauriDriverManifest) {
 } else {
     $null
 }
-$binary = if ($BinaryPath) { (Resolve-Path $BinaryPath).Path } else { Join-Path $repoRoot "desktop\src-tauri\target\debug\formweaver-studio.exe" }
+$binary = if ($BinaryPath) { (Resolve-Path $BinaryPath).Path } else { Join-Path $repoRoot "desktop\src-tauri\target\debug\pic2model-studio.exe" }
 New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
 
 function Wait-Http([string]$Url, [int]$Seconds) {

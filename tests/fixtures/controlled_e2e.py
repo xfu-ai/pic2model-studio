@@ -36,8 +36,8 @@ def create_controlled_e2e_fixture_set(destination: Path) -> dict[str, Path]:
     corrupt_glb = destination / "corrupt.glb"
     corrupt_glb.write_bytes(b"glTF\x02\x00\x00\x00\xff\xff")
 
-    normal_package = destination / "normal.formweaver"
-    shutil.copyfile(fixtures / "complete-v1.formweaver", normal_package)
+    normal_package = destination / "normal.pic2model"
+    shutil.copyfile(fixtures / "complete-v1.pic2model", normal_package)
     corrupt_project = destination / "corrupt-project"
     corrupt_project.mkdir(exist_ok=True)
     (corrupt_project / "project.sqlite3").write_bytes(b"not a sqlite database")

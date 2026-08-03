@@ -155,7 +155,7 @@ The method deliberately combines three layers of proof:
 ### Clean application start and failure blocking
 
 Before every desktop application or controlled-E2E start/restart, resolve and
-terminate all existing **FormWeaver Studio-owned** Tauri, `formweaver-studio`, Python
+terminate all existing **Pic2Model Studio-owned** Tauri, `pic2model-studio`, Python
 sidecar, and Vite processes. Verify each command line belongs to this workspace
 or its controlled/live evidence directory before terminating it; never stop an
 unrelated application. A fresh controlled host then starts from an isolated

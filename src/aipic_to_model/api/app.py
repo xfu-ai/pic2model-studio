@@ -57,7 +57,7 @@ def create_app(
     guard = OriginGuard(token, renderer_origin)
     host_guard = HostControlGuard(host_control_token) if host_control_token else None
     caps = capabilities or HostCapabilityStore()
-    app_db = app_db or Path(tempfile.gettempdir()) / "FormWeaver Studio" / "app.sqlite3"
+    app_db = app_db or Path(tempfile.gettempdir()) / "Pic2Model Studio" / "app.sqlite3"
     dependencies: AppDependencies = compose_local_app(caps, app_db)
     roots = dependencies.roots
     controlled_health_failures = (
@@ -81,7 +81,7 @@ def create_app(
                 dependencies.job_runner.stop()
 
     app = FastAPI(
-        title="FormWeaver Studio B01",
+        title="Pic2Model Studio B01",
         openapi_url=None,
         docs_url=None,
         redoc_url=None,

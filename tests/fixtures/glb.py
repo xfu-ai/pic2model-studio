@@ -27,7 +27,7 @@ def minimal_test_glb() -> bytes:
     document = {
         "asset": {
             "version": "2.0",
-            "generator": "FormWeaver Studio controlled fixture builder",
+            "generator": "Pic2Model Studio controlled fixture builder",
         },
         "scene": 0,
         "scenes": [{"nodes": [0]}],

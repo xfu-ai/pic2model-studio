@@ -1,4 +1,4 @@
-export const PROMPT_SCHEMA = "formweaver.prompt.v1";
+export const PROMPT_SCHEMA = "pic2model.prompt.v1";
 
 export type ManagedPromptDocument = {
   schema: typeof PROMPT_SCHEMA;

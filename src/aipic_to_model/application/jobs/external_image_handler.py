@@ -632,7 +632,7 @@ class ExternalImageJobHandler:
     def _prompt(self, root: Path, project_id: str, asset_id: str) -> str:
         _, content, mime, _ = self._assets.read_content(root, project_id, asset_id, None)
         if mime not in {"application/json", "text/plain"}:
-            raise ValueError("prompt asset must be an formweaver.prompt.v1 JSON document")
+            raise ValueError("prompt asset must be an pic2model.prompt.v1 JSON document")
         text = content.decode("utf-8")
         from ...domain.prompt_parser import parse_bilingual
 

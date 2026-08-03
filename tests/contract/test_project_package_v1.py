@@ -22,7 +22,7 @@ def test_b01_08_export_v1_contains_only_relative_safe_assets(tmp_path: Path):
     source = tmp_path / "image.png"
     Image.new("RGB", (3, 3)).save(source)
     AssetService().import_file(root, project.id, source, "source_image", "r")
-    package = tmp_path / "export.formweaver"
+    package = tmp_path / "export.pic2model"
     result = ProjectPackageService().export_v1(root, package)
     assert result["asset_count"] == 2
     with zipfile.ZipFile(package) as archive:
@@ -31,7 +31,7 @@ def test_b01_08_export_v1_contains_only_relative_safe_assets(tmp_path: Path):
         assert (
             result["manifest_sha256"] == hashlib.sha256(archive.read("manifest.json")).hexdigest()
         )
-    assert ProjectPackageService().inspect_v1(package)["format"] == "FormWeaverProject"
+    assert ProjectPackageService().inspect_v1(package)["format"] == "Pic2ModelProject"
     imported = ProjectPackageService().import_v1(package, tmp_path / "imported")
     assert imported["project_id"] == project.id
     assert (tmp_path / "imported" / "project.json").exists()
@@ -42,7 +42,7 @@ def test_b01_08_fixed_complete_v1_package_imports_with_expected_identity(tmp_pat
         Path(__file__).parents[1]
         / "fixtures"
         / "project_packages"
-        / "complete-v1.formweaver"
+        / "complete-v1.pic2model"
     )
     expected = json.loads(
         package.with_name(f"{package.name}.expected-import.json").read_text("utf-8")
@@ -58,9 +58,9 @@ def test_b01_08_v1_package_schema_rejects_unknown_manifest_fields(tmp_path: Path
         Path(__file__).parents[1]
         / "fixtures"
         / "project_packages"
-        / "complete-v1.formweaver"
+        / "complete-v1.pic2model"
     )
-    bad = tmp_path / "bad.formweaver"
+    bad = tmp_path / "bad.pic2model"
     with zipfile.ZipFile(package) as source, zipfile.ZipFile(bad, "w") as target:
         manifest = json.loads(source.read("manifest.json"))
         manifest["machine_path"] = "C:\\secret"
@@ -80,7 +80,7 @@ def test_b01_08_package_export_journal_completes_and_recovers_only_project_temp(
     source = tmp_path / "image.png"
     Image.new("RGB", (2, 2)).save(source)
     AssetService().import_file(root, project.id, source, "source_image", "import")
-    ProjectPackageService().export_v1(root, tmp_path / "package.formweaver", request_id="export")
+    ProjectPackageService().export_v1(root, tmp_path / "package.pic2model", request_id="export")
     connection = sqlite3.connect(root / "project.sqlite3")
     assert (
         connection.execute(
@@ -110,12 +110,12 @@ def test_b01_08_export_request_id_replays_after_destination_exists(tmp_path: Pat
     source = tmp_path / "image.png"
     Image.new("RGB", (2, 2)).save(source)
     AssetService().import_file(root, project.id, source, "source_image", "import")
-    package = tmp_path / "package.formweaver"
+    package = tmp_path / "package.pic2model"
     service = ProjectPackageService()
     first = service.export_v1(root, package, request_id="export")
     assert service.export_v1(root, package, request_id="export") == first
     with pytest.raises(DomainErrorV1) as conflict:
-        service.export_v1(root, tmp_path / "other.formweaver", request_id="export")
+        service.export_v1(root, tmp_path / "other.pic2model", request_id="export")
     assert conflict.value.code == ErrorCode.IDEMPOTENCY_CONFLICT
 
 
@@ -127,7 +127,7 @@ def test_b01_08_concurrent_exports_never_clobber_the_same_destination(
     source = tmp_path / "image.png"
     Image.new("RGB", (2, 2)).save(source)
     AssetService().import_file(root, project.id, source, "source_image", "import")
-    destination = tmp_path / "concurrent.formweaver"
+    destination = tmp_path / "concurrent.pic2model"
     service = ProjectPackageService()
 
     def export(request_id: str):
@@ -151,7 +151,7 @@ def test_b01_08_import_preserves_unowned_staging_directory(tmp_path: Path):
         Path(__file__).parents[1]
         / "fixtures"
         / "project_packages"
-        / "complete-v1.formweaver"
+        / "complete-v1.pic2model"
     )
     destination = tmp_path / "imported"
     staging = tmp_path / ".imported.importing"
@@ -171,7 +171,7 @@ def test_b01_08_import_recovers_only_matching_owned_staging_directory(
         Path(__file__).parents[1]
         / "fixtures"
         / "project_packages"
-        / "complete-v1.formweaver"
+        / "complete-v1.pic2model"
     )
     destination = tmp_path / "imported"
     staging = tmp_path / ".imported.importing"

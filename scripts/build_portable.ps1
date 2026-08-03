@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $portableRoot = [System.IO.Path]::GetFullPath(
-    (Join-Path $repositoryRoot "portable\FormWeaver-Studio")
+    (Join-Path $repositoryRoot "portable\Pic2Model-Studio")
 )
 $expectedPortableParent = [System.IO.Path]::GetFullPath(
     (Join-Path $repositoryRoot "portable")
@@ -33,9 +33,9 @@ if (-not $SkipBuild) {
     }
 }
 
-$releaseExecutable = Join-Path $repositoryRoot "desktop\src-tauri\target\release\formweaver-studio.exe"
+$releaseExecutable = Join-Path $repositoryRoot "desktop\src-tauri\target\release\pic2model-studio.exe"
 $sidecarDirectory = Join-Path $repositoryRoot "desktop\src-tauri\resources\sidecar"
-$sidecarExecutable = Join-Path $sidecarDirectory "formweaver-sidecar.exe"
+$sidecarExecutable = Join-Path $sidecarDirectory "pic2model-sidecar.exe"
 
 foreach ($requiredFile in @($releaseExecutable, $sidecarExecutable)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
@@ -90,9 +90,9 @@ foreach ($archiveEntry in $requiredArchiveEntries) {
 
 $componentManifest = Join-Path $portableRoot "BUNDLED_COMPONENTS.txt"
 $componentLines = @(
-    "FormWeaver Studio portable runtime components",
+    "Pic2Model Studio portable runtime components",
     "",
-    "resources/sidecar/formweaver-sidecar.exe is a PyInstaller one-file archive.",
+    "resources/sidecar/pic2model-sidecar.exe is a PyInstaller one-file archive.",
     "It embeds these required model and native runtime components:",
     ""
 ) + ($requiredArchiveEntries | ForEach-Object { "- $($_.Replace('\', '/'))" }) + @(
