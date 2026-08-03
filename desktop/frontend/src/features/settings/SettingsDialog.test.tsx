@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient, ServiceProviderStatusDto } from "../../shared/api/client";
+import appShellCss from "../../app/app-shell.css?raw";
 import { SettingsDialog } from "./SettingsDialog";
 
 afterEach(cleanup);
@@ -33,6 +34,12 @@ const providers: ServiceProviderStatusDto = {
 };
 
 describe("SettingsDialog service credentials", () => {
+  it("keeps the modal backdrop above workspace overlays", () => {
+    const backdropRule = appShellCss.match(/\.dialog-backdrop\s*\{([^}]*)\}/)?.[1] ?? "";
+
+    expect(backdropRule).toMatch(/z-index:\s*100/);
+  });
+
   it("lays out every API key and supports independent save and probe", async () => {
     const api = {
       settings: vi.fn().mockResolvedValue({
