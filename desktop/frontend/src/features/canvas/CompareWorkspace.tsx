@@ -88,6 +88,7 @@ export function CompareWorkspace({ projectId, api, onModeChange, referenceContex
   const [sources, setSources] = useState<SourceMap>({});
   const [busyRole, setBusyRole] = useState<ReferenceRole | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [suitabilityAnalysis, setSuitabilityAnalysis] = useState("");
   const [restorePoints, setRestorePoints] = useState<Partial<Record<ReferenceRole, ReferenceRestorePoint>>>({});
   const restoredReferences = useRef(new Set<ReferenceRole>());
   const host = useMemo(() => new HostClient(), []);
@@ -140,6 +141,19 @@ export function CompareWorkspace({ projectId, api, onModeChange, referenceContex
     });
     return () => { active = false; controller.abort(); objectUrls.forEach((url) => URL.revokeObjectURL(url)); };
   }, [api, contentAsset, projectId, styleAsset]);
+
+  useEffect(() => {
+    const analysisAssetId = referenceContext?.suitability_analysis_asset_id;
+    if (!analysisAssetId) {
+      setSuitabilityAnalysis("");
+      return;
+    }
+    let active = true;
+    void api.assetText(projectId, analysisAssetId)
+      .then((value) => { if (active) setSuitabilityAnalysis(value); })
+      .catch(() => { if (active) setSuitabilityAnalysis("3D 建模适用性分析结果暂时无法读取。"); });
+    return () => { active = false; };
+  }, [api, projectId, referenceContext?.suitability_analysis_asset_id]);
 
   const snapshotRole = (role: ReferenceRole): ReferenceRestorePoint => role === "content"
     ? {
@@ -244,6 +258,13 @@ export function CompareWorkspace({ projectId, api, onModeChange, referenceContex
       </aside>
       <PromptParameterDrawer persistent projectId={projectId} api={api} contentAsset={contentAsset} styleAsset={styleAsset} onClose={() => undefined} onModeChange={onModeChange} referenceContext={referenceContext} onReferenceContextChange={onReferenceContextChange} onImageJobQueued={onImageJobQueued} />
     </div>
+    {referenceContext?.suitability_analysis_asset_id && (
+      <section className="reference-analysis-result" aria-label="3D 建模适用性分析">
+        <h2>3D 建模适用性分析</h2>
+        <p>Agent 的分析结果已写回当前页。</p>
+        <pre>{suitabilityAnalysis || "正在读取分析结果…"}</pre>
+      </section>
+    )}
     {error && <p className="compare-error compare-reference-error" role="alert"><WarningCircle size={18} />{error}</p>}
   </section>;
 }

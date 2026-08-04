@@ -18,9 +18,11 @@ from fastapi.responses import JSONResponse, Response
 
 from ..agent.integrations import FACADE_TOOL_NAMES, AgentRuntime
 from ..agent.providers.base import AgentModelProvider, ModelProfile
+from ..agent.providers.qwen3_vl import QWEN3_VL_DEFAULT_MODEL
 from ..application.host_capabilities import HostCapabilityStore
 from ..composition import compose_local_app
 from ..domain.common import DomainErrorV1
+from ..domain.prompt_parser import BilingualPrompt
 from ..infrastructure.providers.config import (
     GEMINI_PROFILE,
     MESHY_PROFILE,
@@ -68,6 +70,13 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        managed_local_monitor = (
+            dependencies.local_provider_monitor is not None
+            and os.environ.get("AIPIC_TO_MODEL_MANAGE_OLLAMA") == "1"
+            and os.environ.get("AIPIC_CONTROLLED_E2E") != "1"
+        )
+        if managed_local_monitor:
+            dependencies.local_provider_monitor.start()
         if dependencies.job_runner is not None:
             dependencies.job_runner.start()
         if dependencies.image_provider_monitor is not None:
@@ -75,6 +84,8 @@ def create_app(
         try:
             yield
         finally:
+            if managed_local_monitor:
+                dependencies.local_provider_monitor.stop()
             if dependencies.image_provider_monitor is not None:
                 dependencies.image_provider_monitor.stop()
             if dependencies.job_runner is not None:
@@ -108,13 +119,11 @@ def create_app(
         project = dependencies.projects.open(root, force_read_only=True)
         try:
             workspace = json.loads(dependencies.projects.workspace_state(root, project_id))
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             workspace = {}
         if not isinstance(workspace, dict):
             workspace = {}
-        assets = dependencies.assets.list_by_group(
-            root, project_id, group=None, read_only=True
-        )
+        assets = dependencies.assets.list_by_group(root, project_id, group=None, read_only=True)
         jobs = dependencies.b02_runtime.job_views(root, include_terminal=False)
         controlled = os.environ.get("AIPIC_CONTROLLED_E2E") == "1"
         public_profiles = dependencies.settings.get_app(dependencies.app_db).get(
@@ -153,12 +162,10 @@ def create_app(
             status = monitor.status_snapshot()
             providers = status.get("providers", [])
             available = any(
-                isinstance(item, dict) and item.get("available") is True
-                for item in providers
+                isinstance(item, dict) and item.get("available") is True for item in providers
             )
             configured = any(
-                isinstance(item, dict) and item.get("configured") is True
-                for item in providers
+                isinstance(item, dict) and item.get("configured") is True for item in providers
             )
             return {
                 "configured": configured,
@@ -259,6 +266,29 @@ def create_app(
         )
         return snapshot
 
+    def selected_agent_model() -> str | None:
+        value = dependencies.settings.get_app(app_db).get("agent_model")
+        return value if isinstance(value, str) else QWEN3_VL_DEFAULT_MODEL
+
+    def create_agent_generation_prompt(
+        invocation, prompt: str, request_id: str
+    ) -> str:
+        created = dependencies.prompt_versions.create_bilingual(
+            dependencies.root_for(invocation.project_id),
+            invocation.project_id,
+            kind="image",
+            bilingual=BilingualPrompt(prompt, prompt, prompt, prompt),
+            request_id=request_id,
+            provenance={
+                "parameters": {
+                    "parser_version": 3,
+                    "kind": "image",
+                    "source": "agent_generate_images",
+                }
+            },
+        )
+        return str(created["asset"]["id"])
+
     agent_runtime = AgentRuntime(
         dependencies.registry,
         dependencies.root_for,
@@ -270,6 +300,11 @@ def create_app(
             asset_id,
             read_only=True,
         ),
+        attachment_content_provider=lambda project_id, asset_id: dependencies.assets.read_content(
+            dependencies.root_for(project_id), project_id, asset_id, None
+        )[1:3],
+        agent_model_selector=selected_agent_model,
+        prompt_creator=create_agent_generation_prompt,
     )
 
     def replay_app_command(action: str, payload: dict[str, str], request_id: str) -> dict | None:

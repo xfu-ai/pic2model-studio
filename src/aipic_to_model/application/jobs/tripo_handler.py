@@ -248,13 +248,17 @@ class TripoLifecycleHandler:
         request = TripoGenerationRequest.model_validate(context["arguments"])
         if request.mode == "multiview":
             members = {name: request.view_asset_ids[name] for name in ("front", "side", "back")}
-            ready = (
-                self._multiview_repository is not None
-                and self._multiview_repository.is_ready_for_submission(
+            confirmed_set_id: str | None = None
+            if self._multiview_repository is not None:
+                if self._multiview_repository.is_ready_for_submission(
                     database, set_id=request.multiview_set_id or "", members=members
-                )
-            )
-            if not ready:
+                ):
+                    confirmed_set_id = request.multiview_set_id
+                else:
+                    confirmed_set_id = self._multiview_repository.confirmed_set_for_members(
+                        database, members=members
+                    )
+            if confirmed_set_id is None:
                 return self._jobs.update(
                     database,
                     job_id=job.id,
@@ -262,15 +266,19 @@ class TripoLifecycleHandler:
                     stage=JobStage.POSTPROCESSING,
                     resume_class=ResumeClass.MANUAL_REVIEW,
                     error={
-                        "code": "MULTIVIEW_MANUAL_CONFIRMATION_REQUIRED",
+                        "code": "MULTIVIEW_CROP_CONFIRMATION_REQUIRED",
                         "category": "input_invalid",
-                        "user_message": "Confirm all six three-view quality checks before submitting to 3D generation.",
+                        "user_message": "请先在三视图制作页确认裁切框，再提交 3D 生成。",
                         "recoverable": True,
                         "failed_object": "multiview_set",
-                        "failed_step": "quality_confirmation",
+                        "failed_step": "crop_confirmation",
                         "safe_to_retry": False,
-                        "recommended_action": "confirm_quality",
+                        "recommended_action": "fix_input",
                     },
+                )
+            if confirmed_set_id != request.multiview_set_id:
+                request = request.model_copy(
+                    update={"multiview_set_id": confirmed_set_id}
                 )
         asset_ids = (
             [request.image_asset_id]

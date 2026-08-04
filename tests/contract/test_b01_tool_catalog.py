@@ -47,7 +47,7 @@ def test_b01_10_registered_project_tool_executes_and_is_audited(tmp_path):
         "request",
     )
     assert result.status == "succeeded"
-    assert json.loads(result.summary) == project.__dict__
+    assert json.loads(result.summary) == {**project.__dict__, "workspace_state": {}}
 
 
 def test_b01_10_read_only_tool_executes_when_project_writes_are_denied(tmp_path, monkeypatch):
@@ -172,6 +172,36 @@ def test_b01_10_real_query_executors_return_frozen_semantic_payloads(tmp_path):
     )
     registry = ToolRegistry()
     register_b01_tools(registry)
+    ProjectService().update_workspace_state(
+        root,
+        project.id,
+        {
+            "workflow_contexts": {
+                "multiview": {
+                    "selected": {
+                        "source": str(source["id"]),
+                        "front": str(left["id"]),
+                        "side": str(left["id"]),
+                        "back": str(right["id"]),
+                    },
+                    "regions": {},
+                    "checks": {},
+                    "quality_confirmed": True,
+                    "set_id": "confirmed-set",
+                    "job_id": None,
+                }
+            }
+        },
+        "persist-confirmed-multiview",
+    )
+    state = registry.execute(
+        root,
+        project.id,
+        "project.get_state",
+        "1.0.0",
+        {"project_id": project.id},
+        "state-request",
+    )
     listed = registry.execute(
         root,
         project.id,
@@ -207,6 +237,20 @@ def test_b01_10_real_query_executors_return_frozen_semantic_payloads(tmp_path):
     assert comparison["same_family"] is True
     assert compared.status == "awaiting_ui_action"
     assert compared.ui_action["type"] == "compare_assets"
+    state_payload = json.loads(state.summary)
+    assert state_payload["workspace_state"]["workflow_contexts"]["multiview"] == {
+        "selected": {
+            "source": str(source["id"]),
+            "front": str(left["id"]),
+            "side": str(left["id"]),
+            "back": str(right["id"]),
+        },
+        "regions": {},
+        "checks": {},
+        "quality_confirmed": True,
+        "set_id": "confirmed-set",
+        "job_id": None,
+    }
 
 
 def test_b01_10_real_mutation_executors_return_every_frozen_semantic_dto(

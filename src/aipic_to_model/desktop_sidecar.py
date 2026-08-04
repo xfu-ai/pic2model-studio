@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .api.app import create_app
 from .api.server import bind_loopback_socket, run_loopback
+from .infrastructure.ollama_runtime import OllamaRuntimeManager
 
 
 def _startup_stage(stage: str) -> None:
@@ -41,20 +42,37 @@ def main() -> None:
         raise RuntimeError("desktop session token was not supplied")
     if not host_control_token:
         raise RuntimeError("desktop host control token was not supplied")
-    _startup_stage("composition")
-    application = create_app(
-        token=token,
-        app_db=Path(args.app_db),
-        host_control_token=host_control_token,
-        renderer_origin=renderer_origin,
+    ollama = (
+        OllamaRuntimeManager.from_environment()
+        if os.environ.get("AIPIC_TO_MODEL_MANAGE_OLLAMA") == "1"
+        and os.environ.get("AIPIC_CONTROLLED_E2E") != "1"
+        else None
     )
-    _startup_stage("binding")
-    listener = bind_loopback_socket()
-    port = int(listener.getsockname()[1])
-    # This is a deliberately tiny, non-secret readiness protocol for the host.
-    print(json.dumps({"event": "ready", "port": port}), flush=True)
-    _startup_stage("serving")
-    run_loopback(application, listener)
+    if ollama is not None:
+        _startup_stage("ollama")
+        # Do not hold the whole desktop behind a cold local runtime. The
+        # supervisor keeps starting Ollama and the local Provider monitor
+        # refreshes its public state when readiness changes.
+        status = ollama.start(wait_for_ready=False)
+        _startup_stage("ollama_ready" if status.available else "ollama_starting")
+    try:
+        _startup_stage("composition")
+        application = create_app(
+            token=token,
+            app_db=Path(args.app_db),
+            host_control_token=host_control_token,
+            renderer_origin=renderer_origin,
+        )
+        _startup_stage("binding")
+        listener = bind_loopback_socket()
+        port = int(listener.getsockname()[1])
+        # This is a deliberately tiny, non-secret readiness protocol for the host.
+        print(json.dumps({"event": "ready", "port": port}), flush=True)
+        _startup_stage("serving")
+        run_loopback(application, listener)
+    finally:
+        if ollama is not None:
+            ollama.stop()
 
 
 if __name__ == "__main__":

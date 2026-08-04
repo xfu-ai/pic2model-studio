@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 from ..core.events import CancellationToken
 from ..core.models import Message, ProviderEvent
@@ -37,6 +37,7 @@ class ModelRequest:
     tools: tuple[dict[str, object], ...] = ()
     temperature: float | None = None
     max_output_tokens: int | None = None
+    reasoning_effort: Literal["none", "low", "medium", "high", "max"] | None = None
 
 
 class AgentModelProvider(Protocol):

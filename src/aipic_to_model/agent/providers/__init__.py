@@ -12,6 +12,11 @@ from .deepseek import create_deepseek_credential_resolver, create_deepseek_profi
 from .factory import create_authenticated_provider, model_profile_for_descriptor
 from .fake import FakeProvider, ScriptedResponse
 from .model_catalog import CatalogModel, FrozenModelCatalog, load_frozen_catalog
+from .qwen3_vl import (
+    create_ollama_credential_resolver,
+    create_qwen3_vl_profile,
+    qwen3_vl_context_window,
+)
 from .radius import (
     RadiusCatalogStore,
     RadiusGatewayConfig,
@@ -54,10 +59,13 @@ __all__ = [
     "create_deepseek_credential_resolver",
     "create_deepseek_profile",
     "create_frozen_provider_registry",
+    "create_ollama_credential_resolver",
+    "create_qwen3_vl_profile",
     "frozen_descriptors",
     "load_frozen_catalog",
     "model_profile_for_descriptor",
     "normalize_radius_gateway_url",
     "parse_radius_gateway_config",
+    "qwen3_vl_context_window",
     "radius_capabilities",
 ]

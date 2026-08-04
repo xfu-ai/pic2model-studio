@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ApiClient, ServiceProviderStatusDto } from "../../shared/api/client";
+import type { ApiClient, LocalProviderStatusDto, ServiceProviderStatusDto } from "../../shared/api/client";
 import "./settings-dialog.css";
 
 const TRIPO_PROFILE = "tripo3d/default";
@@ -18,12 +18,16 @@ function requestId() {
   return crypto.randomUUID();
 }
 
-function providerStateText(provider: ServiceProviderStatusDto["providers"][number]) {
+function providerStateText(provider: { available: boolean; configured: boolean; reason: string | null }) {
   if (provider.available) return "可用";
   if (!provider.configured || provider.reason === "PROVIDER_NOT_CONFIGURED") return "未配置";
   if (provider.reason === "PROVIDER_AUTH_FAILED") return "凭据无效";
   if (provider.reason === "PROVIDER_RATE_LIMITED") return "请求受限";
   if (provider.reason === "not_checked") return "待检测";
+  if (provider.reason === "model_not_installed") return "模型未安装";
+  if (provider.reason === "runtime_not_configured") return "运行时未配置";
+  if (provider.reason === "runtime_unavailable") return "运行时不可用";
+  if (provider.reason === "response_invalid") return "响应异常";
   return "暂不可用";
 }
 
@@ -31,8 +35,12 @@ export function SettingsDialog({ api, onClose }: { api: ApiClient; onClose(): vo
   const [blenderPath, setBlenderPath] = useState("");
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [priority, setPriority] = useState<"tripo" | "meshy">("tripo");
+  const [agentModel, setAgentModel] = useState<"deepseek-v4-flash" | "qwen3-vl:8b" | "qwen3-vl:4b">("qwen3-vl:8b");
+  const [imageBackend, setImageBackend] = useState<"local" | "remote" | "auto">("auto");
+  const [model3dBackend, setModel3dBackend] = useState<"local" | "remote" | "auto">("auto");
   const [probeInterval, setProbeInterval] = useState(300);
   const [providerStatus, setProviderStatus] = useState<ServiceProviderStatusDto | null>(null);
+  const [localProviderStatus, setLocalProviderStatus] = useState<LocalProviderStatusDto | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkingProfile, setCheckingProfile] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -42,6 +50,14 @@ export function SettingsDialog({ api, onClose }: { api: ApiClient; onClose(): vo
       setProviderStatus(await api.serviceProviders());
     } catch {
       setMessage("无法读取生图服务状态。");
+    }
+  };
+
+  const loadLocalProviderStatus = async () => {
+    try {
+      setLocalProviderStatus(await api.localProviders());
+    } catch {
+      setMessage("无法读取本地模型状态。");
     }
   };
 
@@ -56,9 +72,25 @@ export function SettingsDialog({ api, onClose }: { api: ApiClient; onClose(): vo
       if (typeof interval === "number" && interval >= 60 && interval <= 3600) {
         setProbeInterval(interval);
       }
+      const configuredAgentModel = settings.agent_model;
+      if (configuredAgentModel === "deepseek-v4-flash" || configuredAgentModel === "qwen3-vl:8b" || configuredAgentModel === "qwen3-vl:4b") {
+        setAgentModel(configuredAgentModel);
+      }
+      const configuredImageBackend = settings.image_generation_backend;
+      if (configuredImageBackend === "local" || configuredImageBackend === "remote" || configuredImageBackend === "auto") {
+        setImageBackend(configuredImageBackend);
+      }
+      const configuredModel3dBackend = settings.model3d_generation_backend;
+      if (configuredModel3dBackend === "local" || configuredModel3dBackend === "remote" || configuredModel3dBackend === "auto") {
+        setModel3dBackend(configuredModel3dBackend);
+      }
     }).catch(() => setMessage("无法读取设置。"));
     void loadProviderStatus();
-    const timer = window.setInterval(() => void loadProviderStatus(), 15_000);
+    void loadLocalProviderStatus();
+    const timer = window.setInterval(() => {
+      void loadProviderStatus();
+      void loadLocalProviderStatus();
+    }, 15_000);
     return () => window.clearInterval(timer);
   }, [api]);
 
@@ -74,6 +106,18 @@ export function SettingsDialog({ api, onClose }: { api: ApiClient; onClose(): vo
     }
   };
 
+  const refreshLocalProviders = async () => {
+    setChecking(true);
+    try {
+      setLocalProviderStatus(await api.refreshLocalProviders(requestId()));
+      setMessage("本地模型状态已更新；检测不会下载模型，也不会启动生成任务。");
+    } catch {
+      setMessage("本地模型检测失败。");
+    } finally {
+      setChecking(false);
+    }
+  };
+
   const save = async () => {
     const imageProviderPriority = priority === "tripo"
       ? [TRIPO_PROFILE, MESHY_PROFILE]
@@ -82,10 +126,13 @@ export function SettingsDialog({ api, onClose }: { api: ApiClient; onClose(): vo
       blender_path: blenderPath.trim() || null,
       image_provider_priority: imageProviderPriority,
       provider_probe_interval_seconds: probeInterval,
+      agent_model: agentModel,
+      image_generation_backend: imageBackend,
+      model3d_generation_backend: model3dBackend,
     };
     try {
       await api.updateSettings(patch, requestId());
-      setMessage("设置已保存；后续文生图、图生图和图片编辑都会按当前优先级选择可用服务。");
+      setMessage("设置已保存；新的生成任务会在创建前冻结到具体 Provider，任务开始后不会自动换模型。");
       await refreshProviders();
     } catch {
       setMessage("设置保存失败。");
@@ -132,6 +179,23 @@ export function SettingsDialog({ api, onClose }: { api: ApiClient; onClose(): vo
               <p>文生图、图生图和图片编辑都会在提交前选择优先级最高且可用的服务；提交后不会自动换服务，以免重复扣费。</p>
             </div>
             <label>
+              文生图执行后端
+              <select aria-label="文生图执行后端" value={imageBackend} onChange={(event) => setImageBackend(event.target.value as "local" | "remote" | "auto")}>
+                <option value="local">本地 Z-Image-Turbo</option>
+                <option value="auto">自动（本地可用时优先）</option>
+                <option value="remote">远程服务</option>
+              </select>
+            </label>
+            <label>
+              图生 3D 执行后端
+              <select aria-label="图生 3D 执行后端" value={model3dBackend} onChange={(event) => setModel3dBackend(event.target.value as "local" | "remote" | "auto")}>
+                <option value="local">本地 TripoSR（仅单图）</option>
+                <option value="auto">自动（单图本地优先）</option>
+                <option value="remote">远程 Tripo3D</option>
+              </select>
+            </label>
+            <p className="settings-note">TripoSR 只支持单图重建；多视图 3D 始终使用远程 Provider，并在提交前要求审批。</p>
+            <label>
               优先顺序
               <select value={priority} onChange={(event) => setPriority(event.target.value as "tripo" | "meshy")}>
                 <option value="tripo">Tripo3D → Meshy</option>
@@ -143,6 +207,50 @@ export function SettingsDialog({ api, onClose }: { api: ApiClient; onClose(): vo
               <input type="number" min={60} max={3600} step={60} value={probeInterval} onChange={(event) => setProbeInterval(Number(event.target.value))} />
             </label>
             <p className="settings-note">检测只读取账户/接口状态，不创建生图任务，因此不消耗生成额度；它仍会占用普通 API 请求与速率限制。建议保持 300 秒或更长。</p>
+          </section>
+
+          <section className="settings-section" aria-labelledby="agent-model-section-title">
+            <div>
+              <strong id="agent-model-section-title">Agent 对话模型</strong>
+              <p>新建 Agent 对话将使用此设置；已经创建的对话会保持原有模型，避免中途改变上下文和执行行为。</p>
+            </div>
+            <label htmlFor="agent-model">
+              Agent 模型
+              <select id="agent-model" value={agentModel} onChange={(event) => setAgentModel(event.target.value as "deepseek-v4-flash" | "qwen3-vl:8b" | "qwen3-vl:4b")}>
+                <option value="qwen3-vl:8b">Qwen3-VL 8B（本地 Ollama，默认）</option>
+                <option value="qwen3-vl:4b">Qwen3-VL 4B（本地 Ollama）</option>
+                <option value="deepseek-v4-flash">DeepSeek Agent（远程）</option>
+              </select>
+            </label>
+          </section>
+
+          <section className="settings-section" aria-labelledby="local-provider-title">
+            <div className="settings-section-heading">
+              <div>
+                <strong id="local-provider-title">本地开源模型</strong>
+                <p>状态检测只检查 Ollama、受控执行器和模型文件是否就绪，不下载权重，也不会启动对话、生图或 3D 生成。</p>
+              </div>
+              <button type="button" onClick={() => void refreshLocalProviders()} disabled={checking}>
+                {checking ? "检测中…" : "检测本地模型"}
+              </button>
+            </div>
+            <div className="local-provider-grid" role="status" aria-live="polite">
+              {localProviderStatus?.providers.map((provider) => (
+                <article className="local-provider-card" key={provider.profile}>
+                  <div className="credential-card-heading">
+                    <span className={`provider-dot ${provider.available ? "available" : "unavailable"}`} aria-hidden="true" />
+                    <div>
+                      <strong>{provider.label}</strong>
+                      <small>{provider.model} · {providerStateText(provider)}</small>
+                      <small>{provider.engine_version ? `引擎 ${provider.engine_version}` : provider.engine}</small>
+                    </div>
+                  </div>
+                  <small>{provider.capabilities.join(" · ")}</small>
+                  <small>{provider.license.identifier} · <a href={provider.license.source_url} target="_blank" rel="noreferrer">项目来源</a></small>
+                  <small className="settings-note">{provider.license.notice}</small>
+                </article>
+              )) ?? <p>正在读取本地模型状态…</p>}
+            </div>
           </section>
 
           <section className="settings-section settings-secret" aria-labelledby="credential-title">

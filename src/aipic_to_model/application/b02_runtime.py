@@ -17,6 +17,7 @@ from ..domain.errors import DomainErrorV1, ErrorCode
 from ..domain.job_models import CancelCapability, JobStage, JobStatus, ResumeClass
 from ..domain.tools import ToolResultV1
 from .b02_tool_catalog import B02_TOOLS
+from .generation_policy import effective_generation_risk
 from .jobs.submission_policy import PAID_SUBMISSION_TOOLS
 
 _APPROVED_EXTERNALLY = PAID_SUBMISSION_TOOLS
@@ -34,12 +35,12 @@ _MESHY_IMAGE_TOOLS = frozenset(
         "multiview.regenerate_view",
     }
 )
-_AUTO_IMAGE_TOOLS = frozenset({"image.generate"})
 _GEMINI_VISION_TOOLS = frozenset(
     {
         "image.analyze_content",
         "image.analyze_style",
         "image.evaluate_3d_suitability",
+        "image.understand_for_agent",
         "prompt.rewrite",
         "selection.auto_suggest_boxes",
         "multiview.detect_regions",
@@ -82,7 +83,7 @@ def _collect_input_asset_ids(arguments: Any) -> list[str]:
             for child_key, child_value in value.items():
                 visit(child_value, str(child_key))
             return
-        if key.endswith("_asset_id") and isinstance(value, str):
+        if (key == "asset_id" or key.endswith("_asset_id")) and isinstance(value, str):
             found.append(value)
             return
         if key.endswith("_asset_ids") and isinstance(value, list):
@@ -95,13 +96,6 @@ def _collect_input_asset_ids(arguments: Any) -> list[str]:
 def _canonical_provider_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Keep production tools on the application's configured provider policy."""
 
-    if name in _AUTO_IMAGE_TOOLS:
-        return {
-            **arguments,
-            "provider_profile": "image-generation/auto",
-            "channel": "auto",
-            "model": "auto",
-        }
     if name in _MESHY_IMAGE_TOOLS:
         normalized = {
             **arguments,
@@ -149,6 +143,7 @@ class PersistentB02ToolRuntime:
     ) -> ToolResultV1:
         database = root / "project.sqlite3"
         arguments = _canonical_provider_arguments(name, arguments)
+        risk_level = effective_generation_risk(name, risk_level, arguments)
         if name in {"job.get_status", "model3d.get_status"}:
             return self._status(database, call_id, str(arguments["job_id"]))
         if name in {"job.cancel", "model3d.cancel"}:
@@ -197,7 +192,7 @@ class PersistentB02ToolRuntime:
                     "recommended_action": "configure_provider",
                 },
             )
-        if name in _APPROVED_EXTERNALLY:
+        if risk_level in {RiskLevel.EXTERNAL, RiskLevel.EXTERNAL_PAID} and name in _APPROVED_EXTERNALLY:
             return self._request_approval(database, project_id, call_id, name, arguments)
         if execution == "job":
             return self._schedule(database, call_id, name, risk_level, arguments)
@@ -521,7 +516,7 @@ class PersistentB02ToolRuntime:
         name = str(context["tool_name"])
         source_tool_call_id = str(context["source_tool_call_id"])
         arguments = _canonical_provider_arguments(name, arguments)
-        if risk is RiskLevel.EXTERNAL_PAID or name in _APPROVED_EXTERNALLY:
+        if risk is RiskLevel.EXTERNAL_PAID:
             arguments[_RETRY_SOURCE_TOOL_CALL_ID] = source_tool_call_id
             return self._request_approval(database, project_id, call_id, name, arguments)
         return self._schedule(

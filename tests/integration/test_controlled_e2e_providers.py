@@ -88,7 +88,7 @@ def test_controlled_e2e_mode_generates_valid_image_candidates(tmp_path: Path, mo
     dependencies.job_worker.run_once(root, project.id, owner="controlled-e2e")
     job = dependencies.jobs.get(root / "project.sqlite3", job_id=job_id)
     assert job.status is JobStatus.SUCCEEDED
-    assert job.provider == "image-generation/auto"
+    assert job.provider == "tripo3d/default"
     assert len(job.result_asset_ids) == 2
     candidate = dependencies.assets.get(root, project.id, job.result_asset_ids[0])
     assert candidate["provenance"]["provider_profile"] == "tripo3d/default"

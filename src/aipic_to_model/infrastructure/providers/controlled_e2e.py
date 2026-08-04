@@ -126,6 +126,29 @@ class ControlledE2EVisionProvider:
             model=request.model,
         )
 
+    def understand_image(
+        self,
+        *,
+        asset_id: str,
+        question: str,
+        model: str,
+        image_bytes: bytes,
+        mime_type: str,
+    ) -> ProviderResult:
+        del model, image_bytes
+        self.calls.append(
+            ("vision.understand", {"asset_id": asset_id, "mime_type": mime_type})
+        )
+        if self.fail:
+            return _failure("understanding")
+        return ProviderResult(
+            ok=True,
+            provider_request_id="controlled-vision-understanding-1",
+            stage="understanding",
+            retryable=False,
+            payload={"text": f"Controlled image understanding received: {question}"},
+        )
+
     def rewrite(self, *, prompt: str, instruction: str, model: str) -> ProviderResult:
         self.calls.append(("vision.rewrite", {"model": model}))
         if self.fail:

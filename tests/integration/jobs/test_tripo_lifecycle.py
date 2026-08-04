@@ -106,7 +106,7 @@ def test_approved_tripo_lifecycle_uploads_creates_gets_downloads_and_registers_g
     assert [name for name, _ in provider.calls].count("tripo.create") == 1
 
 
-def test_multiview_tripo_submission_requires_manual_quality_confirmation_before_upload(
+def test_multiview_tripo_submission_requires_confirmed_crops_before_upload(
     tmp_path: Path,
 ) -> None:
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
@@ -157,13 +157,13 @@ def test_multiview_tripo_submission_requires_manual_quality_confirmation_before_
     job = dependencies.jobs.get(root / "project.sqlite3", job_id=queued.job["job_id"])
     assert job.status is JobStatus.FAILED
     assert job.resume_class is ResumeClass.MANUAL_REVIEW
-    assert job.error["code"] == "MULTIVIEW_MANUAL_CONFIRMATION_REQUIRED"
+    assert job.error["code"] == "MULTIVIEW_CROP_CONFIRMATION_REQUIRED"
     assert job.error["safe_to_retry"] is False
     assert not transfer.calls and not provider.calls
     assert worker.run_once(root, project.id, owner="worker") is None
 
 
-def test_multiview_tripo_submission_accepts_quality_confirmation_saved_after_final_crops(
+def test_multiview_tripo_submission_accepts_confirmed_final_crops_without_quality_gate(
     tmp_path: Path,
 ) -> None:
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
@@ -188,20 +188,6 @@ def test_multiview_tripo_submission_accepts_quality_confirmation_saved_after_fin
     crops = dependencies.multiview.crop_confirmed_views(
         root, project.id, set_id=set_id, request_id="crop-final-views"
     )
-    report = dependencies.multiview.validate(
-        root,
-        set_id=set_id,
-        checks={
-            "subject_scale": "passed",
-            "direction": "passed",
-            "key_accessory": "passed",
-            "truncation": "passed",
-            "background": "passed",
-            "resolution": "passed",
-        },
-    )
-    assert report.can_continue
-
     requested = dependencies.registry.execute(
         root,
         project.id,
@@ -209,7 +195,9 @@ def test_multiview_tripo_submission_accepts_quality_confirmation_saved_after_fin
         "1.0.0",
         {
             "mode": "multiview",
-            "multiview_set_id": set_id,
+            # Agent callers used to confuse the sheet asset with the persisted set.
+            # The exact confirmed crop triple remains authoritative and repairs this ref.
+            "multiview_set_id": str(source["id"]),
             "view_asset_ids": crops,
             "provider_profile": "fake-tripo",
             "model": "fake",

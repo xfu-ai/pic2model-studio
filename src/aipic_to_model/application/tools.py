@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
 from jsonschema import Draft202012Validator
@@ -47,6 +47,12 @@ class ToolRegistry:
         self._filesystem = filesystem
         self.manifests: dict[tuple[str, str], ToolManifestV1] = {}
         self.executors: dict[str, Callable[..., ToolResultV1]] = {}
+        self._request_policy: Any | None = None
+
+    def set_request_policy(self, policy: Any) -> None:
+        if self._request_policy is not None:
+            raise ValueError("Tool request policy is already configured")
+        self._request_policy = policy
 
     def register(self, manifest: ToolManifestV1, executor: Callable[..., ToolResultV1]) -> None:
         key = (manifest.name, manifest.version)
@@ -69,20 +75,25 @@ class ToolRegistry:
         approved = bool(context.get("external_approved", False))
         visible: list[dict[str, Any]] = []
         for manifest in sorted(self.manifests.values(), key=lambda item: (item.name, item.version)):
+            effective_risk = (
+                self._request_policy.visibility_risk(manifest.name, manifest.risk_level)
+                if self._request_policy is not None
+                else manifest.risk_level
+            )
             reason: str | None = None
-            if read_only and manifest.risk_level is not RiskLevel.READ_ONLY:
+            if read_only and effective_risk is not RiskLevel.READ_ONLY:
                 reason = "project_read_only"
             elif manifest.allowed_asset_types and not available_assets.intersection(
                 manifest.allowed_asset_types
             ):
                 reason = "required_asset_type_missing"
             elif (
-                manifest.risk_level in {RiskLevel.EXTERNAL, RiskLevel.EXTERNAL_PAID}
+                effective_risk in {RiskLevel.EXTERNAL, RiskLevel.EXTERNAL_PAID}
                 and not providers
             ):
                 reason = "provider_unavailable"
             elif (
-                manifest.risk_level in {RiskLevel.EXTERNAL, RiskLevel.EXTERNAL_PAID}
+                effective_risk in {RiskLevel.EXTERNAL, RiskLevel.EXTERNAL_PAID}
                 and not approved
             ):
                 reason = "approval_required"
@@ -118,6 +129,7 @@ class ToolRegistry:
                 ErrorCode.TOOL_ARGUMENT_INVALID,
                 "Tool arguments may not contain paths, commands, URLs, or credentials.",
             )
+        request_arguments = dict(arguments)
         argument_profile = arguments.get("provider_profile")
         if argument_profile is not None and not isinstance(argument_profile, str):
             raise DomainErrorV1(ErrorCode.TOOL_ARGUMENT_INVALID, "Invalid provider profile.")
@@ -130,16 +142,33 @@ class ToolRegistry:
                 ErrorCode.TOOL_ARGUMENT_INVALID,
                 "Provider profile must be identical in the request and Tool arguments.",
             )
-        # The validated Tool argument is authoritative.  B02 external tools
-        # require it, which prevents approval and idempotency from binding one
-        # profile while the provider receives another.
+        # The caller-facing profile is validated before the configured policy
+        # freezes a concrete execution profile.
         provider_profile = argument_profile or provider_profile
+        request_provider_profile = provider_profile
+        effective_risk = manifest.risk_level
+        if self._request_policy is not None:
+            resolved = self._request_policy.resolve(name, arguments, manifest.risk_level)
+            arguments = resolved.arguments
+            effective_risk = resolved.risk_level
+            if list(Draft202012Validator(manifest.input_schema).iter_errors(arguments)):
+                raise DomainErrorV1(
+                    ErrorCode.TOOL_ARGUMENT_INVALID,
+                    "Resolved Tool arguments are invalid.",
+                )
+            if self._contains_forbidden_argument(arguments):
+                raise DomainErrorV1(
+                    ErrorCode.TOOL_ARGUMENT_INVALID,
+                    "Resolved Tool arguments may not contain unsafe values.",
+                )
+            resolved_profile = arguments.get("provider_profile")
+            provider_profile = resolved_profile if isinstance(resolved_profile, str) else None
         writable = True
         try:
             self._filesystem.require_writable_root(root)
         except DomainErrorV1 as error:
             if (
-                manifest.risk_level is not RiskLevel.READ_ONLY
+                effective_risk is not RiskLevel.READ_ONLY
                 or error.code != ErrorCode.PROJECT_READ_ONLY
             ):
                 raise
@@ -156,10 +185,10 @@ class ToolRegistry:
                     "project_id": project_id,
                     "tool_name": name,
                     "tool_version": version,
-                    "arguments": self._filesystem.redact_structure(arguments),
+                    "arguments": self._filesystem.redact_structure(request_arguments),
                     "run_id": run_id,
                     "round_index": round_index,
-                    "provider_profile": provider_profile,
+                    "provider_profile": request_provider_profile,
                 }
             ).encode("utf-8")
         ).hexdigest()
@@ -167,12 +196,12 @@ class ToolRegistry:
         def key_factory(
             tool_name: str,
             tool_version: str,
-            tool_arguments: dict[str, Any],
+            tool_arguments: Mapping[str, object],
             asset_hashes: list[str],
             profile: str | None,
         ) -> str:
-            key_arguments = tool_arguments
-            if manifest.risk_level is RiskLevel.EXTERNAL_PAID:
+            key_arguments: Mapping[str, object] = tool_arguments
+            if effective_risk is RiskLevel.EXTERNAL_PAID:
                 # A request ID identifies one explicit, approved submission
                 # intent. Replaying that same request remains idempotent, but
                 # a later user click is a new intent and must create a new Job.
@@ -212,7 +241,7 @@ class ToolRegistry:
             arguments_json=canonical_json(self._filesystem.redact_structure(arguments)),
             arguments=arguments,
             provider_profile=provider_profile,
-            risk_level=manifest.risk_level.value,
+            risk_level=effective_risk.value,
             input_asset_ids=self._input_asset_ids(arguments),
             key_factory=key_factory,
         )
@@ -274,7 +303,7 @@ class ToolRegistry:
             )
             return result
         except Exception as error:
-            unknown = manifest.risk_level in {RiskLevel.EXTERNAL, RiskLevel.EXTERNAL_PAID}
+            unknown = effective_risk in {RiskLevel.EXTERNAL, RiskLevel.EXTERNAL_PAID}
             error_payload = (
                 error.as_dict()
                 if isinstance(error, DomainErrorV1)

@@ -8,7 +8,14 @@ from typing import Any, Literal, cast
 
 from ...domain.job_models import JobStage, JobStatus, ResumeClass
 from ...domain.multiview_rules import default_regions
-from ...domain.provider_models import AnalysisRequest, GenerationRequest, ProviderResult
+from ...domain.provider_models import (
+    AnalysisRequest,
+    ErrorCategory,
+    ErrorDetail,
+    GenerationRequest,
+    ProviderResult,
+    RecommendedAction,
+)
 from ...domain.production_prompts import (
     MULTIVIEW_BASE_PROMPT,
     MULTIVIEW_SHEET_REQUIREMENTS,
@@ -426,11 +433,19 @@ class ExternalImageJobHandler:
         prompt_id = str(arguments.get("prompt_asset_id") or source_id)
         _, content, mime, _ = self._assets.read_content(root, project_id, source_id, None)
         content, mime = _provider_image(content, mime)
-        prompt = (
+        custom_prompt = (
             self._prompt(root, project_id, prompt_id)
             if arguments.get("prompt_asset_id")
-            else MULTIVIEW_BASE_PROMPT
+            else None
         )
+        prompt_parts = [MULTIVIEW_BASE_PROMPT]
+        if custom_prompt:
+            prompt_parts.append(
+                "Additional subject and style direction follows. Preserve it only where it "
+                "does not conflict with the required orthographic three-view composition: "
+                f"{custom_prompt}"
+            )
+        prompt_parts.append(MULTIVIEW_SHEET_REQUIREMENTS)
         request = {
             "prompt_asset_id": prompt_id,
             "source_asset_id": source_id,
@@ -439,7 +454,7 @@ class ExternalImageJobHandler:
             "mode": "i2i",
             "model": "auto",
             "candidate_count": 1,
-            "prompt": f"{prompt}\n\n{MULTIVIEW_SHEET_REQUIREMENTS}",
+            "prompt": "\n\n".join(prompt_parts),
             "source_bytes": content,
             "source_mime": mime,
             **(controls or {}),
@@ -571,6 +586,26 @@ class ExternalImageJobHandler:
     ) -> list[str] | ProviderResult:
         set_id = str(arguments["multiview_set_id"])
         members = self._multiview_repository.current_assets(root / "project.sqlite3", set_id)
+        if set(members) != {"front", "side", "back"}:
+            return ProviderResult(
+                ok=False,
+                stage="validating_multiview_set",
+                retryable=False,
+                error=ErrorDetail(
+                    code="MULTIVIEW_SET_NOT_FOUND",
+                    category=ErrorCategory.INPUT_INVALID,
+                    user_message=(
+                        "The requested multiview set does not exist or is incomplete. "
+                        "Open the Multiview workspace and confirm the crop regions first."
+                    ),
+                    recoverable=True,
+                    failed_object="asset",
+                    failed_step="load_multiview_set",
+                    fee_incurred=False,
+                    safe_to_retry=False,
+                    recommended_action=RecommendedAction.FIX_INPUT,
+                ),
+            )
         first = members["front"]
         gate = self._analyze_for_gate(root, project_id, arguments, first, "content")
         if isinstance(gate, ProviderResult):

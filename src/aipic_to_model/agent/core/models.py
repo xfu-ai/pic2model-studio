@@ -197,6 +197,9 @@ type Message = UserMessage | SystemMessage | AssistantMessage | ToolResultMessag
 
 class ProviderEventType(StrEnum):
     MESSAGE_START = "message_start"
+    REASONING_START = "reasoning_start"
+    REASONING_DELTA = "reasoning_delta"
+    REASONING_END = "reasoning_end"
     TEXT_DELTA = "text_delta"
     TOOL_CALL_START = "tool_call_start"
     TOOL_CALL_ARGUMENTS_DELTA = "tool_call_arguments_delta"

@@ -106,6 +106,11 @@ class ModelAssetService:
         _, content, _, _ = self._assets.read_content(root, project_id, asset_id, None)
         provenance = asset.get("provenance", {})
         source_job_id = provenance.get("source_job_id") if isinstance(provenance, dict) else None
+        if not isinstance(source_job_id, str) and isinstance(provenance, dict):
+            parameters = provenance.get("parameters")
+            source_job_id = (
+                parameters.get("source_job_id") if isinstance(parameters, dict) else None
+            )
         inspection = inspect_glb(
             content,
             local_relative_path=relative_path,

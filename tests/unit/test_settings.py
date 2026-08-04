@@ -61,6 +61,15 @@ def test_app_settings_accept_blender_path(tmp_path: Path):
     assert settings.update_app(app_db, {"blender_path": blender})["blender_path"] == blender
 
 
+def test_app_settings_allow_only_supported_agent_models(tmp_path: Path):
+    settings = SettingsService(SettingsRepository())
+    app_db = tmp_path / "app.sqlite3"
+    assert settings.update_app(app_db, {"agent_model": "deepseek-v4-flash"})["agent_model"] == "deepseek-v4-flash"
+    assert settings.update_app(app_db, {"agent_model": "qwen3-vl:8b"})["agent_model"] == "qwen3-vl:8b"
+    with pytest.raises(DomainErrorV1):
+        settings.update_app(app_db, {"agent_model": "unsupported-model"})
+
+
 def test_b01_09_project_setting_request_id_replays_or_conflicts(tmp_path: Path):
     root = tmp_path / "project"
     ProjectService().create(root, "Demo")
@@ -177,3 +186,21 @@ def test_b01_09_nested_settings_secrets_and_signed_urls_are_rejected_before_pers
         b"aB3dE5fG7hJ9kLmNpQrStUvWxYz0123456789AbCd" not in (root / "project.sqlite3").read_bytes()
     )
     assert not app_db.exists() or b"X-Amz-Signature=sentinel" not in app_db.read_bytes()
+
+
+def test_generation_backend_settings_accept_only_explicit_policy_values(tmp_path: Path) -> None:
+    settings = SettingsService(SettingsRepository())
+    app_db = tmp_path / "app.sqlite3"
+
+    saved = settings.update_app(
+        app_db,
+        {
+            "image_generation_backend": "local",
+            "model3d_generation_backend": "auto",
+        },
+    )
+    assert saved["image_generation_backend"] == "local"
+    assert saved["model3d_generation_backend"] == "auto"
+
+    with pytest.raises(DomainErrorV1):
+        settings.update_app(app_db, {"image_generation_backend": "fallback"})

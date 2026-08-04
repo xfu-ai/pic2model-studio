@@ -17,6 +17,15 @@ describe("AgentPanel", () => {
     expect(api.createAgentConversation.mock.calls[0][1]).toContain(
       "status=awaiting_ui_action means the requested desktop action has not completed yet",
     );
+    expect(api.createAgentConversation.mock.calls[0][1]).toContain(
+      "attached image is included directly in the current multimodal message",
+    );
+    expect(api.createAgentConversation.mock.calls[0][1]).toContain(
+      "message provides only a managed image reference",
+    );
+    expect(api.createAgentConversation.mock.calls[0][1]).toContain(
+      "Chinese input receives Chinese output, English input receives English output",
+    );
   });
 
   it("restores the most recent project conversation instead of creating a blank one", async () => {
@@ -508,7 +517,7 @@ describe("AgentPanel", () => {
     expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "multiview" }));
   });
 
-  it("finishes image analysis without requesting asset or shell inspection", async () => {
+  it("continues the original task after image analysis finishes", async () => {
     const onWorkspaceAction = vi.fn();
     const api = {
       agentConversations: vi.fn().mockResolvedValue({
@@ -533,6 +542,7 @@ describe("AgentPanel", () => {
         id: "job-analysis",
         job_type: "image.analyze_style",
         status: "succeeded",
+        input_asset_ids: ["style-source"],
         output_asset_ids: ["analysis-result"],
       }),
       sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
@@ -547,17 +557,20 @@ describe("AgentPanel", () => {
     await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
       "project-1",
       "restored",
-      expect.stringContaining("FINAL RESPONSE ONLY"),
+      expect.stringContaining("Continue the original user goal autonomously"),
       "agent-job-terminal-job-analysis",
       true,
     ));
-    expect(api.sendAgentMessage.mock.calls[0][2]).toContain(
-      "Do not call inspect_workspace, read, write, edit, bash, or any other Tool",
-    );
-    expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "compare" }));
+    expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "compare",
+      jobType: "image.analyze_style",
+      assetId: "style-source",
+      analysisKind: "style",
+      resultAssetIds: ["analysis-result"],
+    }));
   });
 
-  it("finishes generated images with a final-only instruction", async () => {
+  it("continues the original task after generated images finish", async () => {
     const onWorkspaceAction = vi.fn();
     const api = {
       agentConversations: vi.fn().mockResolvedValue({
@@ -598,14 +611,16 @@ describe("AgentPanel", () => {
     await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
       "project-1",
       "restored",
-      expect.stringContaining("FINAL RESPONSE ONLY"),
+      expect.stringContaining("Continue the original user goal autonomously"),
       "agent-job-terminal-job-image",
       true,
     ));
-    expect(api.sendAgentMessage.mock.calls[0][2]).toContain(
-      "Do not call inspect_workspace or any other Tool",
-    );
-    expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "candidate" }));
+    expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "prompt_image",
+      jobId: "job-image",
+      jobType: "image.generate_variants",
+      resultAssetIds: ["image-a", "image-b"],
+    }));
   });
 
   it("opens transparent export results in the candidate workspace", async () => {
@@ -649,7 +664,7 @@ describe("AgentPanel", () => {
     await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
       "project-1",
       "restored",
-      expect.stringContaining("FINAL RESPONSE ONLY"),
+      expect.stringContaining("Continue the original user goal autonomously"),
       "agent-job-terminal-job-transparent",
       true,
     ));
@@ -721,7 +736,7 @@ describe("AgentPanel", () => {
     expect(api.sendAgentMessage.mock.calls[1][2]).toContain("job_id=job-1");
     expect(api.sendAgentMessage.mock.calls[2][2]).toContain("result_asset_ids=glb-1");
     expect(api.sendAgentMessage.mock.calls[2][3]).toBe("agent-job-terminal-job-1");
-    expect(onJobQueued).toHaveBeenCalledOnce();
+    expect(onJobQueued).toHaveBeenCalledWith("job-1", null, undefined);
     expect(screen.queryByText("The approval could not be submitted. Try again.")).toBeNull();
   });
 
@@ -879,7 +894,7 @@ describe("AgentPanel", () => {
     expect(container.querySelector(".agent-tool-execution .agent-chat-image")).toBeNull();
   });
 
-  it("renders thinking in-order and can replace a run with Pi's hidden label", async () => {
+  it("does not render persisted model reasoning", async () => {
     const api = {
       createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
       sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
@@ -894,10 +909,48 @@ describe("AgentPanel", () => {
     await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalled());
     fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "Status" } });
     fireEvent.click(screen.getByLabelText("Send to Agent"));
-    expect(await screen.findByText("I should inspect the current asset.")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Hide thinking" }));
     expect(screen.queryByText("I should inspect the current asset.")).toBeNull();
-    expect(screen.getByText("Thinking...")).toBeVisible();
+    expect(await screen.findByText("The current asset is ready.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /thinking/i })).toBeNull();
+  });
+
+  it("does not render streamed Qwen reasoning", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({
+        id: "conversation-1", state: "running", message_count: 0,
+      }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "message.started",
+            payload: { conversation_id: "conversation-1" },
+            created_at: new Date().toISOString(),
+          }, {
+            sequence_no: 2,
+            event_type: "reasoning.started",
+            payload: { conversation_id: "conversation-1" },
+            created_at: new Date().toISOString(),
+          }, {
+            sequence_no: 3,
+            event_type: "reasoning.delta",
+            payload: {
+              conversation_id: "conversation-1",
+              text: "I am examining the image before selecting a tool.",
+            },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 3,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 3 }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    expect(screen.queryByText("I am examining the image before selecting a tool.")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("I am examining the image before selecting a tool.")).toBeNull());
   });
 
   it("shows a durable failed status when the Agent stops after tool execution", async () => {
@@ -912,7 +965,7 @@ describe("AgentPanel", () => {
           items: [{
             sequence_no: 1,
             event_type: "conversation.failed",
-            payload: { conversation_id: "conversation-1", code: "provider_error" },
+            payload: { conversation_id: "conversation-1", code: "provider_error", reason: "resource_exhausted" },
             created_at: new Date().toISOString(),
           }],
           next_cursor: 1,
@@ -922,7 +975,7 @@ describe("AgentPanel", () => {
     render(<AgentPanel projectId="project-1" api={api as never} />);
     expect(await screen.findByText("I could not finish the final response.")).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("Agent stopped before completing this response. You can try again.");
-    expect(screen.getByText("The Agent stopped before it could finish its response. You can try again.")).toBeVisible();
+    expect(screen.getByText(/Local Qwen stopped because GPU or system memory was exhausted/)).toBeVisible();
   });
 
   it("shows a completed status only after the runtime completes the conversation", async () => {
@@ -992,6 +1045,134 @@ describe("AgentPanel", () => {
     expect(screen.getByRole("button", { name: "Open selection" })).toBeVisible();
   });
 
+  it("writes completed local split outputs back to target extraction", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [
+            {
+              sequence_no: 1,
+              event_type: "tool.call",
+              payload: {
+                conversation_id: "conversation-1",
+                tool_call: {
+                  id: "split-call",
+                  name: "split_image",
+                  arguments: { source_asset_ref: "breakdown-sheet", split_mode: "grid", columns: 2, rows: 1 },
+                },
+              },
+              created_at: new Date().toISOString(),
+            },
+            {
+              sequence_no: 2,
+              event_type: "tool.completed",
+              payload: {
+                conversation_id: "conversation-1",
+                tool_call_id: "split-call",
+                tool_name: "split_image",
+                is_error: false,
+                result: {
+                  content: [{ type: "text", text: "Image split locally." }],
+                  details: {
+                    status: "succeeded",
+                    output_asset_ids: ["part-a", "part-b"],
+                  },
+                  is_error: false,
+                },
+              },
+              created_at: new Date().toISOString(),
+            },
+          ],
+          next_cursor: 2,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 2 }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} onWorkspaceAction={onWorkspaceAction} />);
+
+    await waitFor(() => expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "target_extract",
+      assetId: "breakdown-sheet",
+      jobType: "image.split_local",
+      resultAssetIds: ["part-a", "part-b"],
+    })));
+    expect(onWorkspaceAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the source and extraction method when an Agent target-extraction Job completes", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [
+            {
+              sequence_no: 1,
+              event_type: "tool.call",
+              payload: {
+                conversation_id: "conversation-1",
+                tool_call: {
+                  id: "extract-call",
+                  name: "split_image",
+                  arguments: {
+                    source_asset_ref: "source-for-extraction",
+                    prompt_asset_ref: "subject-prompt",
+                    split_mode: "element",
+                  },
+                },
+              },
+              created_at: new Date().toISOString(),
+            },
+            {
+              sequence_no: 2,
+              event_type: "tool.completed",
+              payload: {
+                conversation_id: "conversation-1",
+                tool_call_id: "extract-call",
+                tool_name: "split_image",
+                is_error: false,
+                result: {
+                  content: [{ type: "text", text: "Target extraction job queued." }],
+                  details: {
+                    status: "queued",
+                    job: { job_id: "target-job", job_type: "element.split" },
+                  },
+                  is_error: false,
+                },
+              },
+              created_at: new Date().toISOString(),
+            },
+          ],
+          next_cursor: 2,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 2 }),
+      job: vi.fn().mockResolvedValue({
+        id: "target-job",
+        status: "succeeded",
+        job_type: "element.split",
+        output_asset_ids: ["extracted-subject"],
+      }),
+      sendAgentMessage: vi.fn().mockResolvedValue({}),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} onWorkspaceAction={onWorkspaceAction} />);
+
+    await waitFor(() => expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "target_extract",
+      method: "breakdown",
+      assetId: "source-for-extraction",
+      jobId: "target-job",
+      jobType: "element.split",
+      resultAssetIds: ["extracted-subject"],
+    })));
+  });
+
   it("opens a completed facade workspace only once when the parent callback changes", async () => {
     const firstWorkspaceAction = vi.fn();
     const secondWorkspaceAction = vi.fn();
@@ -1010,11 +1191,11 @@ describe("AgentPanel", () => {
             event_type: "tool.completed",
             payload: {
               conversation_id: "conversation-1",
-              tool_call_id: "prompt-call",
-              tool_name: "prepare_prompt",
+              tool_call_id: "split-call",
+              tool_name: "split_image",
               is_error: false,
               result: {
-                content: [{ type: "text", text: "Prompt extracted." }],
+                content: [{ type: "text", text: "Image split." }],
                 details: { status: "succeeded" },
                 is_error: false,
               },
@@ -1034,7 +1215,7 @@ describe("AgentPanel", () => {
       />,
     );
 
-    await waitFor(() => expect(firstWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "prompt_image" })));
+    await waitFor(() => expect(firstWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "target_extract" })));
     expect(firstWorkspaceAction).toHaveBeenCalledTimes(1);
 
     rerender(
@@ -1171,5 +1352,71 @@ describe("AgentPanel", () => {
     })));
     expect(onWorkspaceAction).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Open target extraction" })).toBeVisible();
+  });
+
+  it("passes Agent image-generation parameters into the creative image workspace", async () => {
+    const onWorkspaceAction = vi.fn();
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1", state: "idle", message_count: 0 }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "tool.call",
+            payload: {
+              conversation_id: "conversation-1",
+              tool_call: {
+                id: "generate-call",
+                name: "generate_images",
+                arguments: {
+                  mode: "from_prompt",
+                  prompt: "A polished ceramic fox figurine on a studio plinth",
+                  candidate_count: 4,
+                  aspect_ratio: "16:9",
+                },
+              },
+            },
+            created_at: new Date().toISOString(),
+          }, {
+            sequence_no: 2,
+            event_type: "tool.completed",
+            payload: {
+              conversation_id: "conversation-1",
+              tool_call_id: "generate-call",
+              tool_name: "generate_images",
+              is_error: false,
+              result: {
+                content: [{ type: "text", text: "Approval is required." }],
+                details: {
+                  status: "awaiting_ui_action",
+                  data: { prompt_asset_id: "prompt-agent" },
+                  ui_action: {
+                    action_id: "generate-approval",
+                    type: "approval_required",
+                    workspace_mode: "working",
+                  },
+                },
+                is_error: false,
+              },
+            },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 2,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 2 }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} onWorkspaceAction={onWorkspaceAction} />);
+
+    await waitFor(() => expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "prompt_image",
+      prompt: "A polished ceramic fox figurine on a studio plinth",
+      promptAssetId: "prompt-agent",
+      candidateCount: 4,
+      aspectRatio: "16:9",
+      actionId: "generate-approval",
+    })));
   });
 });

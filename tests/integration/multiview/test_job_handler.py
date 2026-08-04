@@ -12,7 +12,12 @@ from aipic_to_model.application.host_capabilities import HostCapabilityStore
 from aipic_to_model.application.jobs.external_image_handler import ExternalImageJobHandler
 from aipic_to_model.application.multiview import MultiviewService
 from aipic_to_model.composition import compose_local_app
+from aipic_to_model.domain.prompt_parser import BilingualPrompt
 from aipic_to_model.domain.provider_models import ProviderResult
+from aipic_to_model.domain.production_prompts import (
+    MULTIVIEW_BASE_PROMPT,
+    MULTIVIEW_SHEET_REQUIREMENTS,
+)
 from aipic_to_model.infrastructure.sqlite.candidate_repository import CandidateRepository
 from aipic_to_model.infrastructure.sqlite.multiview_repository import MultiviewRepository
 
@@ -89,10 +94,89 @@ def test_meshy_multiview_job_returns_one_horizontal_sheet_for_manual_cropping(
     assert provider.calls == 1
     assert provider.requests[0]["candidate_count"] == 1
     rendered_prompt = str(provider.requests[0]["prompt"])
-    assert "Return one horizontal image" in rendered_prompt
+    assert "Return one wide horizontal image" in rendered_prompt
+    assert "the views must not touch, overlap, or visually merge" in rendered_prompt
     assert "ordered front, left side, then rear" in rendered_prompt
     sheet = dependencies.assets.get(root, project.id, output[0])
     assert sheet["asset_type"] == "multiview"
     assert sheet["parent_asset_id"] == source["id"]
     assert sheet["metadata"]["width"] == 72
     assert sheet["metadata"]["height"] == 20
+    invalid_detection = handler._detect_regions(
+        root,
+        project.id,
+        SimpleNamespace(id="job-detect-invalid", tool_call_id="call-detect-invalid"),
+        {
+            "multiview_set_id": output[0],
+            "provider_profile": "gemini/google/default",
+            "model": "gemini-flash-lite-latest",
+        },
+    )
+    assert isinstance(invalid_detection, ProviderResult)
+    assert invalid_detection.error is not None
+    assert invalid_detection.error.code == "MULTIVIEW_SET_NOT_FOUND"
+    assert invalid_detection.retryable is False
+
+
+def test_custom_multiview_prompt_keeps_the_core_orthographic_constraints(
+    tmp_path: Path,
+) -> None:
+    dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
+    root = tmp_path / "project"
+    project = dependencies.projects.create(root, "Custom multiview prompt")
+    source_path = tmp_path / "source.png"
+    Image.new("RGB", (32, 32), "white").save(source_path, "PNG")
+    source = dependencies.assets.import_file(
+        root,
+        project.id,
+        source_path,
+        "source_image",
+        "source",
+    )
+    prompt = dependencies.prompt_versions.create_bilingual(
+        root,
+        project.id,
+        kind="multiview",
+        bilingual=BilingualPrompt(
+            "保留黄铜细节",
+            "Preserve brass details",
+            "保留黄铜细节与乳白色陶瓷材质",
+            "Preserve the brass details and ivory ceramic material.",
+        ),
+        request_id="custom-multiview-prompt",
+    )
+    repository = MultiviewRepository()
+    provider = SingleSheetProvider()
+    handler = ExternalImageJobHandler(
+        dependencies.jobs,
+        dependencies.assets,
+        dependencies.selections,
+        MultiviewService(dependencies.assets, dependencies.selections, repository),
+        repository,
+        CandidateService(dependencies.assets, CandidateRepository()),
+        dependencies.prompt_versions,
+        object(),
+        provider,
+    )
+
+    output = handler._generate_multiview(
+        root,
+        project.id,
+        SimpleNamespace(id="job-custom", tool_call_id="call-custom"),
+        {
+            "source_asset_id": str(source["id"]),
+            "prompt_asset_id": str(prompt["asset"]["id"]),
+            "provider_profile": "meshy/default",
+            "channel": "meshy",
+            "model": "nano-banana",
+        },
+    )
+
+    assert isinstance(output, list)
+    rendered_prompt = str(provider.requests[0]["prompt"])
+    assert MULTIVIEW_BASE_PROMPT in rendered_prompt
+    assert MULTIVIEW_SHEET_REQUIREMENTS in rendered_prompt
+    assert "Preserve the brass details and ivory ceramic material." in rendered_prompt
+    assert "does not conflict with the required orthographic three-view composition" in rendered_prompt
+    assert "at least 5 percent of the full canvas width" in rendered_prompt
+    assert "Each view must be independently crop-ready" in rendered_prompt

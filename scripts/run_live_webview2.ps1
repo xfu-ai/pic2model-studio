@@ -88,7 +88,11 @@ Remove-Item Env:AIPIC_CONTROLLED_E2E_APP_DATA -ErrorAction SilentlyContinue
 Remove-Item Env:AIPIC_CONTROLLED_E2E_FIXTURE_ROOT -ErrorAction SilentlyContinue
 Remove-Item Env:AIPIC_CONTROLLED_E2E_PROVIDER_FAILURE -ErrorAction SilentlyContinue
 Remove-Item Env:AIPIC_CONTROLLED_E2E_RENDERER_ORIGIN -ErrorAction SilentlyContinue
-Remove-Item Env:AIPIC_TO_MODEL_PYTHON -ErrorAction SilentlyContinue
+$workspacePython = Join-Path $repoRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $workspacePython -PathType Leaf)) {
+    throw "The workspace Python environment is missing."
+}
+$env:AIPIC_TO_MODEL_PYTHON = $workspacePython
 $env:AIPIC_TO_MODEL_FORCE_PYTHON = "1"
 $env:AIPIC_TO_MODEL_STARTUP_DIAGNOSTICS = "1"
 $env:CARGO_TARGET_DIR = $target

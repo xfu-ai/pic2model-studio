@@ -99,7 +99,12 @@ fn provider_compatible_python() -> PathBuf {
         let configured = PathBuf::from(configured);
         let controlled_e2e =
             std::env::var("AIPIC_CONTROLLED_E2E").ok().as_deref() == Some("1");
-        if controlled_e2e || python_has_provider_tls(&configured) {
+        let force_workspace_python =
+            std::env::var("AIPIC_TO_MODEL_FORCE_PYTHON").ok().as_deref() == Some("1");
+        // An explicit workspace interpreter is authoritative in Debug/Live
+        // runs. Falling back to a global Python can silently load an older
+        // installed package instead of the source tree being exercised.
+        if controlled_e2e || force_workspace_python || python_has_provider_tls(&configured) {
             return configured;
         }
     }
@@ -1064,8 +1069,13 @@ fn main() {
             app.manage(sidecar);
             // WebView2 window creation is comparatively expensive. Keep one hidden,
             // isolated selector warm so capture latency is dominated by the actual
-            // desktop copy instead of a new browser process.
-            let _ = get_or_create_screen_capture_overlay(app.handle());
+            // desktop copy instead of a new browser process. In controlled E2E the
+            // main window must create the profile first so its CDP browser arguments
+            // are authoritative; a warm overlay can otherwise lock that profile
+            // before the configured main-window environment is initialized.
+            if !controlled_e2e {
+                let _ = get_or_create_screen_capture_overlay(app.handle());
+            }
             let tray_menu = MenuBuilder::new(app)
                 .text("show", "显示图模工坊")
                 .separator()

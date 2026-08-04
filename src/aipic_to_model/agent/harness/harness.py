@@ -343,7 +343,10 @@ class AgentHarness:
             )
             return None if updated == original_request else updated
         clamped_output = clamp_max_output_tokens(
-            request.messages, self._context_window, requested_output
+            request.messages,
+            self._context_window,
+            requested_output,
+            request.tools,
         )
         updated = replace(
             request,

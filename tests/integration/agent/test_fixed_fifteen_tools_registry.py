@@ -25,7 +25,7 @@ async def _execute(tool, call_id: str, arguments: dict[str, object]):
 
 @pytest.mark.agent
 @pytest.mark.asyncio
-async def test_fixed_fifteen_tools_execute_against_real_registry(
+async def test_fixed_tools_execute_against_real_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Exercise every model-visible Tool without contacting a live Provider."""
@@ -33,7 +33,7 @@ async def test_fixed_fifteen_tools_execute_against_real_registry(
     monkeypatch.setenv("AIPIC_CONTROLLED_E2E", "1")
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
     root = tmp_path / "project"
-    project = dependencies.projects.create(root, "Fixed fifteen registry")
+    project = dependencies.projects.create(root, "Fixed tool registry")
     dependencies.roots[project.id] = root
 
     source_file = tmp_path / "source.png"
@@ -127,10 +127,13 @@ async def test_fixed_fifteen_tools_execute_against_real_registry(
             "analysis_type": "content",
         },
     )
-    results["prepare_prompt"] = await _execute(
-        tools["prepare_prompt"],
-        "prompt-call",
-        {"task": "validate", "prompt_asset_ref": str(prompt["id"])},
+    results["understand_image"] = await _execute(
+        tools["understand_image"],
+        "understand-call",
+        {
+            "source_asset_ref": str(source["id"]),
+            "question": "What is visible in this image?",
+        },
     )
     results["generate_images"] = await _execute(
         tools["generate_images"],
@@ -193,9 +196,10 @@ async def test_fixed_fifteen_tools_execute_against_real_registry(
     assert all(not result.is_error for result in results.values())
     assert results["inspect_workspace"].details["status"] == "succeeded"
     assert results["select_asset"].details["status"] == "succeeded"
-    assert results["prepare_prompt"].details["status"] == "succeeded"
     assert results["control_job"].details["status"] == "succeeded"
     assert results["analyze_image"].details["status"] == "queued"
+    assert results["understand_image"].details["status"] == "succeeded"
+    assert "Controlled image understanding" in results["understand_image"].content[0].text
     assert results["edit_image"].details["status"] == "queued"
     assert results["process_model3d"].details["status"] == "succeeded"
     assert results["generate_images"].details["status"] == "awaiting_ui_action"

@@ -36,10 +36,17 @@ if (-not $SkipBuild) {
 $releaseExecutable = Join-Path $repositoryRoot "desktop\src-tauri\target\release\pic2model-studio.exe"
 $sidecarDirectory = Join-Path $repositoryRoot "desktop\src-tauri\resources\sidecar"
 $sidecarExecutable = Join-Path $sidecarDirectory "pic2model-sidecar.exe"
+$ollamaDirectory = Join-Path $repositoryRoot ".local\ollama\v0.32.5"
+$ollamaModelsDirectory = Join-Path $repositoryRoot ".local\ollama-models"
 
 foreach ($requiredFile in @($releaseExecutable, $sidecarExecutable)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Required portable artifact is missing: $requiredFile"
+    }
+}
+foreach ($requiredDirectory in @($ollamaDirectory, $ollamaModelsDirectory)) {
+    if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
+        throw "Required local Qwen runtime directory is missing: $requiredDirectory"
     }
 }
 
@@ -58,6 +65,10 @@ $portableSidecar = Join-Path $portableRoot "resources\sidecar"
 New-Item -ItemType Directory -Path $portableSidecar -Force | Out-Null
 Copy-Item -LiteralPath $releaseExecutable -Destination $portableRoot
 Copy-Item -LiteralPath $sidecarExecutable -Destination $portableSidecar
+$portableOllama = Join-Path $portableRoot "resources\ollama"
+$portableOllamaModels = Join-Path $portableRoot "resources\ollama-models"
+Copy-Item -LiteralPath $ollamaDirectory -Destination $portableOllama -Recurse
+Copy-Item -LiteralPath $ollamaModelsDirectory -Destination $portableOllamaModels -Recurse
 
 $sidecarReadme = Join-Path $sidecarDirectory "README.txt"
 if (Test-Path -LiteralPath $sidecarReadme -PathType Leaf) {
@@ -93,6 +104,8 @@ $componentLines = @(
     "Pic2Model Studio portable runtime components",
     "",
     "resources/sidecar/pic2model-sidecar.exe is a PyInstaller one-file archive.",
+    "resources/ollama contains the pinned Ollama v0.32.5 Windows runtime.",
+    "resources/ollama-models contains the verified local Qwen3-VL model store.",
     "It embeds these required model and native runtime components:",
     ""
 ) + ($requiredArchiveEntries | ForEach-Object { "- $($_.Replace('\', '/'))" }) + @(

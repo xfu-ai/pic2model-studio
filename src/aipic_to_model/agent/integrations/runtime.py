@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 
+from PIL import Image
+
 from ...application.tools import ToolRegistry as AIPicToolRegistry
-from ..core.errors import AgentCancelledError
+from ..core.errors import AgentCancelledError, ProviderError
 from ..core.events import AgentEvent, AgentEventType
 from ..core.models import (
     AssistantMessage,
     CustomMessage,
+    ImageContent,
     ManagedAssetAttachment,
     Message,
     SystemMessage,
@@ -37,23 +42,50 @@ from ..providers.deepseek import (
     create_deepseek_profile,
     deepseek_context_window,
 )
+from ..providers.qwen3_vl import (
+    OLLAMA_PROVIDER_ID,
+    QWEN3_VL_DEFAULT_TIMEOUT_SECONDS,
+    QWEN3_VL_SUPPORTED_MODELS,
+    create_ollama_credential_resolver,
+    create_qwen3_vl_profile,
+    qwen3_vl_context_window,
+)
 from ..session.sqlite import LinearSessionRepository
 from ..skills.loader import SkillLoader
 from ..tools import BashTool, EditTool, ReadTool, WriteTool
 from .aipic_tools import AIPicToolInvocation
-from .facade_tools import FACADE_TOOL_NAMES, facade_tools
+from .facade_tools import FACADE_TOOL_NAMES, PromptCreator, facade_tools
 
 ProviderFactory = Callable[[ModelProfile], AgentModelProvider]
 RuntimeContextProvider = Callable[[str], dict[str, object]]
 AttachmentProvider = Callable[[str, str], dict[str, object]]
+AgentModelSelector = Callable[[], str | None]
+AttachmentContentProvider = Callable[[str, str], tuple[bytes, str]]
 _MODEL_TOOL_RESULT_TEXT_LIMIT = 4_096
+_AGENT_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_AGENT_IMAGE_FORMATS = {
+    "image/jpeg": "JPEG",
+    "image/png": "PNG",
+    "image/webp": "WEBP",
+}
+_MAX_AGENT_IMAGE_ATTACHMENTS = 4
+_MAX_AGENT_IMAGE_BYTES = 10 * 1024 * 1024
+_MAX_AGENT_IMAGE_REQUEST_BYTES = 24 * 1024 * 1024
+_MAX_AGENT_IMAGE_DIMENSION = 8_192
+_MAX_AGENT_IMAGE_PIXELS = 40_000_000
+_LEGACY_QWEN3_VL_MAX_OUTPUT_TOKENS = {2_048, 16_384}
+_LEGACY_QWEN3_VL_TIMEOUT_SECONDS = 120.0
+_QWEN3_VL_DEFAULT_THINKING_LEVEL = "medium"
 _FINAL_RESPONSE_CONTRACT = (
     "Completion contract: do not finish a user turn until the provider has "
     "returned a terminal finish_reason. After one or more tool calls have "
     "finished, always send a concise, user-facing final summary of the "
     "completed work, results, and any warnings or next action. Never end a "
     "turn with an empty assistant message: the terminal response must contain "
-    "non-whitespace text."
+    "non-whitespace text. Reply in the language of the latest natural-language "
+    "user request: Chinese input receives Chinese output, English input receives "
+    "English output, and Chinese is the default when ambiguous. Internal tool and "
+    "task-event text does not change that user-facing language."
 )
 _ASYNC_JOB_CONTRACT = (
     "Async-job contract: call control_job with action=status at most once for "
@@ -87,13 +119,29 @@ _TOOL_SELECTION_CONTRACT = (
     "to edit project databases, mutate managed asset files, call provider endpoints, "
     "read secrets, or bypass an AIPic approval or UI action."
 )
+_IMAGE_TOOL_DECISION_CONTRACT = (
+    "Image-tool decision contract: for ordinary generation, variants, transforms, multiview, "
+    "and clearly understandable 3D requests, understand a directly attached image yourself; "
+    "for a managed image reference, use understand_image only when a concrete visual fact is "
+    "needed. It returns transient text and does not create a project analysis. Call "
+    "analyze_image(content) only when the user asks for an explainable or reusable content "
+    "specification; call analyze_image(style) only when the user asks to analyze, preserve, "
+    "compare, or reuse a style; and call analyze_image(3d_suitability) only when the user asks "
+    "for, or the task is genuinely uncertain about, 3D readiness. Do not call content and style "
+    "analysis together unless the user has distinct requirements. Set refresh=true only when the "
+    "user explicitly asks to reanalyze. Do not call analyze_image after understand_image for the "
+    "same purpose, or understand_image after analyze_image, unless the user asks a new distinct "
+    "question. Never use either image-understanding path to locate three-view crop boxes."
+)
 _MANAGED_ATTACHMENT_CONTRACT = (
     "Managed-attachment contract: every attached image is already stored in the current "
-    "project. Infer the role of each image from the user's request and use the exact "
-    "source_asset_ref values with managed facade tools as needed. There is no implicit "
-    "primary image; if the intended mapping is materially ambiguous, ask the user. Never "
-    "use read, bash, or a filesystem path for attachments, and never expose opaque "
-    "references in user-facing text."
+    "project. A multimodal model also receives the image pixels in this user message and must "
+    "understand them directly. A text-only model receives only these managed references and "
+    "must call understand_image before making claims about visual content. Infer the role of "
+    "each image from the user's request and use the exact source_asset_ref values with managed "
+    "facade tools as needed. There is no implicit primary image; if the intended mapping is "
+    "materially ambiguous, ask the user. Never use read, bash, or a filesystem path for "
+    "attachments, and never expose opaque references in user-facing text."
 )
 
 
@@ -116,12 +164,18 @@ class AgentRuntime:
         provider_factory: ProviderFactory | None = None,
         runtime_context_provider: RuntimeContextProvider | None = None,
         attachment_provider: AttachmentProvider | None = None,
+        attachment_content_provider: AttachmentContentProvider | None = None,
+        agent_model_selector: AgentModelSelector | None = None,
+        prompt_creator: PromptCreator | None = None,
     ) -> None:
         self._registry = registry
         self._root_for = root_for
         self._provider_factory = provider_factory or _default_provider
         self._runtime_context_provider = runtime_context_provider or _empty_runtime_context
         self._attachment_provider = attachment_provider
+        self._attachment_content_provider = attachment_content_provider
+        self._agent_model_selector = agent_model_selector or (lambda: None)
+        self._prompt_creator = prompt_creator
         self._conversations: dict[tuple[str, str], _Conversation] = {}
 
     def create(
@@ -129,13 +183,28 @@ class AgentRuntime:
     ) -> dict[str, object]:
         root = self._root_for(project_id)
         repository = LinearSessionRepository(root / "agent.sqlite3")
-        profile = create_deepseek_profile(model=model)
+        selected_model = model if model is not None else self._agent_model_selector()
+        # Qwen3-VL is the configured local Agent by default. A caller may
+        # explicitly select DeepSeek for a new conversation; the selected
+        # profile is frozen in that conversation and never silently changed.
+        profile = (
+            create_qwen3_vl_profile(model=selected_model)
+            if selected_model in QWEN3_VL_SUPPORTED_MODELS
+            else create_deepseek_profile(model=selected_model)
+        )
         session = repository.create(
             system_prompt=_system_prompt_for_project(system_prompt, project_id),
             profile=_profile_dict(profile),
+            thinking_level=(
+                _QWEN3_VL_DEFAULT_THINKING_LEVEL
+                if profile.provider_id == OLLAMA_PROVIDER_ID
+                else "off"
+            ),
             active_tools=("read", "write", "edit", "bash", *FACADE_TOOL_NAMES),
         )
-        conversation = self._build(project_id, session.id, repository, profile)
+        conversation = self._build(
+            project_id, session.id, repository, profile, session.thinking_level
+        )
         self._conversations[(project_id, session.id)] = conversation
         self._append_event(
             repository, session.id, "conversation.created", {"conversation_id": session.id}
@@ -169,13 +238,17 @@ class AgentRuntime:
         for summary in summaries:
             conversation = self._conversations.get((project_id, str(summary["id"])))
             error_code = (
-                conversation.error_code if conversation and conversation.error_code else repository.terminal_error_code(str(summary["id"]))
+                conversation.error_code
+                if conversation and conversation.error_code
+                else repository.terminal_error_code(str(summary["id"]))
             )
             summary["state"] = (
                 "error"
                 if error_code is not None
                 else "running"
-                if conversation is not None and conversation.task is not None and not conversation.task.done()
+                if conversation is not None
+                and conversation.task is not None
+                and not conversation.task.done()
                 else "idle"
             )
             summary["error_code"] = error_code
@@ -218,6 +291,13 @@ class AgentRuntime:
             ),
             name=f"agent-{conversation_id}",
         )
+        # Most desktop sends are intentionally fire-and-poll (``wait=False``).
+        # ``_run`` persists a durable failure before re-raising, so consume the
+        # finished Task's exception here as well; otherwise asyncio reports
+        # "Task exception was never retrieved" even though the UI has already
+        # received the matching ``conversation.failed`` event.  Awaiting the
+        # same Task for ``wait=True`` still raises normally.
+        conversation.task.add_done_callback(_consume_task_exception)
         if wait:
             await conversation.task
         return self.status(project_id, conversation_id)
@@ -227,9 +307,14 @@ class AgentRuntime:
     ) -> tuple[ManagedAssetAttachment, ...]:
         if not asset_refs:
             return ()
+        if len(asset_refs) > _MAX_AGENT_IMAGE_ATTACHMENTS or len(set(asset_refs)) != len(
+            asset_refs
+        ):
+            raise RuntimeError("agent_attachment_invalid")
         if self._attachment_provider is None:
             raise RuntimeError("agent_attachment_not_found")
         attachments: list[ManagedAssetAttachment] = []
+        total_bytes = 0
         for asset_ref in asset_refs:
             try:
                 asset = self._attachment_provider(project_id, asset_ref)
@@ -238,7 +323,7 @@ class AgentRuntime:
             mime_type = str(asset.get("mime_type", ""))
             asset_type = str(asset.get("asset_type", ""))
             if (
-                not mime_type.startswith("image/")
+                mime_type not in _AGENT_IMAGE_MIME_TYPES
                 or asset_type
                 not in {
                     "source_image",
@@ -252,6 +337,16 @@ class AgentRuntime:
                 or asset.get("trashed_at") is not None
             ):
                 raise RuntimeError("agent_attachment_not_image")
+            size_bytes = asset.get("size_bytes")
+            if (
+                not isinstance(size_bytes, int)
+                or isinstance(size_bytes, bool)
+                or not 0 < size_bytes <= _MAX_AGENT_IMAGE_BYTES
+            ):
+                raise RuntimeError("agent_attachment_invalid")
+            total_bytes += size_bytes
+            if total_bytes > _MAX_AGENT_IMAGE_REQUEST_BYTES:
+                raise RuntimeError("agent_attachment_invalid")
             attachments.append(
                 ManagedAssetAttachment(
                     asset_id=asset_ref,
@@ -326,9 +421,7 @@ class AgentRuntime:
         messages = conversation.repository.open(conversation_id).messages
         if limit is not None:
             messages = messages[-limit:]
-        return [
-            _message_dto(item) for item in messages
-        ]
+        return [_message_dto(item) for item in messages]
 
     def message_page(
         self,
@@ -353,9 +446,7 @@ class AgentRuntime:
         }
 
     def event_cursor(self, project_id: str, conversation_id: str) -> int:
-        return self._get(project_id, conversation_id).repository.api_event_cursor(
-            conversation_id
-        )
+        return self._get(project_id, conversation_id).repository.api_event_cursor(conversation_id)
 
     def events(
         self, project_id: str, conversation_id: str, after: int = 0, limit: int = 100
@@ -412,11 +503,18 @@ class AgentRuntime:
                 return ()
             conversation.error_code = _safe_error_code(error)
             self._ensure_failure_terminal_message(conversation, conversation_id, force=True)
+            failure_payload: dict[str, object] = {
+                "conversation_id": conversation_id,
+                "code": conversation.error_code,
+            }
+            provider_reason = _safe_provider_reason(error)
+            if provider_reason is not None:
+                failure_payload["reason"] = provider_reason
             self._append_event(
                 conversation.repository,
                 conversation_id,
                 "conversation.failed",
-                {"conversation_id": conversation_id, "code": conversation.error_code},
+                failure_payload,
             )
             raise
 
@@ -426,11 +524,12 @@ class AgentRuntime:
         conversation_id: str,
         repository: LinearSessionRepository,
         profile: ModelProfile,
+        thinking_level: str,
     ) -> _Conversation:
         root = self._root_for(project_id)
         env = LocalExecutionEnv((root,))
         request_id = f"agent-{conversation_id}"
-        # The model sees four generic workspace tools plus eleven stable AIPic
+        # The model sees four generic workspace tools plus the stable AIPic
         # facades. Atomic B01/B02 manifests remain internal execution contracts.
         tools = (
             ReadTool(env),
@@ -441,6 +540,7 @@ class AgentRuntime:
             self._registry,
             lambda: AIPicToolInvocation(root, project_id, request_id, run_id=conversation_id),
             lambda: self._runtime_context_provider(project_id),
+            self._prompt_creator,
         )
         loader = SkillLoader(env, project_roots=(root / ".agent-skills",))
         harness = AgentHarness(
@@ -452,11 +552,17 @@ class AgentRuntime:
             skill_loader=loader,
             session_message_sanitizer=_sanitize_message,
             context_projection_transform=_project_model_context,
-            provider_request_transform=lambda request: _with_runtime_context(
-                request, self._runtime_context_provider(project_id)
+            provider_request_transform=lambda request: _with_request_images(
+                _with_reasoning_effort(
+                    _with_runtime_context(request, self._runtime_context_provider(project_id)),
+                    thinking_level,
+                ),
+                project_id,
+                self._attachment_content_provider,
             ),
-            context_window=deepseek_context_window(profile.model),
+            context_window=_model_context_window(profile),
         )
+        harness.agent.state.thinking_level = thinking_level
         conversation = _Conversation(harness, repository)
 
         async def persist(event: AgentEvent) -> None:
@@ -531,12 +637,27 @@ class AgentRuntime:
         repository = LinearSessionRepository(root / "agent.sqlite3")
         session = repository.open(conversation_id)
         profile, profile_updated = _upgrade_profile_defaults(_profile_from_dict(session.profile))
-        if profile_updated:
+        thinking_level = session.thinking_level
+        thinking_updated = False
+        if profile.provider_id == OLLAMA_PROVIDER_ID and thinking_level == "off":
+            # Qwen thinking was previously enabled implicitly by Ollama while this
+            # durable field was never wired to the request. Preserve that behavior
+            # explicitly for recovered local-model conversations.
+            thinking_level = _QWEN3_VL_DEFAULT_THINKING_LEVEL
+            thinking_updated = True
+        if profile_updated or thinking_updated:
             repository.update_config(
                 conversation_id,
-                profile_json=json.dumps(_profile_dict(profile)),
+                **(
+                    {"profile_json": json.dumps(_profile_dict(profile))}
+                    if profile_updated
+                    else {}
+                ),
+                **({"thinking_level": thinking_level} if thinking_updated else {}),
             )
-        conversation = self._build(project_id, conversation_id, repository, profile)
+        conversation = self._build(
+            project_id, conversation_id, repository, profile, thinking_level
+        )
         self._conversations[key] = conversation
         return conversation
 
@@ -552,6 +673,7 @@ class AgentRuntime:
             and _ASYNC_JOB_CONTRACT in session.system_prompt
             and _IMAGE_PRESENTATION_CONTRACT in session.system_prompt
             and _TOOL_SELECTION_CONTRACT in session.system_prompt
+            and _IMAGE_TOOL_DECISION_CONTRACT in session.system_prompt
         ):
             return
         prompt = session.system_prompt.strip()
@@ -561,6 +683,7 @@ class AgentRuntime:
                 _ASYNC_JOB_CONTRACT,
                 _IMAGE_PRESENTATION_CONTRACT,
                 _TOOL_SELECTION_CONTRACT,
+                _IMAGE_TOOL_DECISION_CONTRACT,
                 _FINAL_RESPONSE_CONTRACT,
             )
             if instruction not in prompt
@@ -580,8 +703,33 @@ class AgentRuntime:
         repository.append_api_event(conversation_id, event_type, payload)
 
 
-def _default_provider(_profile: ModelProfile) -> AgentModelProvider:
-    return OpenAICompletionsProvider(create_deepseek_credential_resolver())
+def _default_provider(profile: ModelProfile) -> AgentModelProvider:
+    if profile.provider_id == OLLAMA_PROVIDER_ID:
+        return OpenAICompletionsProvider(
+            create_ollama_credential_resolver(),
+            include_stream_usage=False,
+            enforce_loopback=True,
+        )
+    if profile.provider_id == "deepseek":
+        return OpenAICompletionsProvider(create_deepseek_credential_resolver())
+    raise ProviderError(f"Unsupported Agent provider profile: {profile.provider_id}")
+
+
+def _model_context_window(profile: ModelProfile) -> int:
+    if profile.provider_id == OLLAMA_PROVIDER_ID:
+        return qwen3_vl_context_window(profile.model)
+    if profile.provider_id == "deepseek":
+        return deepseek_context_window(profile.model)
+    raise ProviderError(f"Unsupported Agent provider profile: {profile.provider_id}")
+
+
+def _profile_supports_direct_image_input(profile: ModelProfile) -> bool:
+    """Return whether this frozen conversation profile accepts image content directly."""
+
+    return (
+        profile.provider_id == OLLAMA_PROVIDER_ID
+        and profile.model in QWEN3_VL_SUPPORTED_MODELS
+    )
 
 
 def _empty_runtime_context(_project_id: str) -> dict[str, object]:
@@ -594,9 +742,15 @@ def _empty_runtime_context(_project_id: str) -> dict[str, object]:
     }
 
 
-def _with_runtime_context(
-    request: ModelRequest, snapshot: dict[str, object]
-) -> ModelRequest:
+def _consume_task_exception(task: asyncio.Task[Any]) -> None:
+    """Mark a completed background Agent failure as observed by asyncio."""
+
+    if task.cancelled():
+        return
+    task.exception()
+
+
+def _with_runtime_context(request: ModelRequest, snapshot: dict[str, object]) -> ModelRequest:
     """Add a fresh, non-persistent host snapshot to every provider request."""
 
     payload = json.dumps(
@@ -615,6 +769,96 @@ def _with_runtime_context(
     else:
         messages = (runtime_message, *messages)
     return replace(request, messages=messages)
+
+
+def _with_reasoning_effort(request: ModelRequest, thinking_level: str) -> ModelRequest:
+    """Enable Ollama reasoning without changing DeepSeek's wire contract."""
+
+    if request.profile.provider_id != OLLAMA_PROVIDER_ID:
+        return request
+    normalized = thinking_level.strip().lower()
+    effort = {
+        "off": "none",
+        "none": "none",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "max": "max",
+    }.get(normalized, _QWEN3_VL_DEFAULT_THINKING_LEVEL)
+    return replace(request, reasoning_effort=cast(Any, effort))
+
+
+def _with_request_images(
+    request: ModelRequest,
+    project_id: str,
+    content_provider: AttachmentContentProvider | None,
+) -> ModelRequest:
+    """Hydrate managed image metadata only for a single local Provider request."""
+
+    if not _profile_supports_direct_image_input(request.profile):
+        return request
+    attachment_count = sum(
+        len(message.attachments) for message in request.messages if isinstance(message, UserMessage)
+    )
+    if attachment_count == 0:
+        return request
+    if attachment_count > _MAX_AGENT_IMAGE_ATTACHMENTS or content_provider is None:
+        raise RuntimeError("agent_attachment_invalid")
+
+    total_bytes = 0
+    hydrated: list[Message] = []
+    for message in request.messages:
+        if not isinstance(message, UserMessage) or not message.attachments:
+            hydrated.append(message)
+            continue
+        blocks: list[TextContent | ImageContent] = []
+        if isinstance(message.content, str):
+            blocks.append(TextContent(message.content))
+        else:
+            blocks.extend(item for item in message.content if isinstance(item, TextContent))
+        for attachment in message.attachments:
+            try:
+                image_bytes, mime_type = content_provider(project_id, attachment.asset_id)
+            except Exception as error:
+                raise RuntimeError("agent_attachment_not_found") from error
+            if (
+                mime_type != attachment.mime_type
+                or mime_type not in _AGENT_IMAGE_MIME_TYPES
+                or not 0 < len(image_bytes) <= _MAX_AGENT_IMAGE_BYTES
+            ):
+                raise RuntimeError("agent_attachment_invalid")
+            total_bytes += len(image_bytes)
+            if total_bytes > _MAX_AGENT_IMAGE_REQUEST_BYTES:
+                raise RuntimeError("agent_attachment_invalid")
+            _validate_agent_image(image_bytes, mime_type)
+            blocks.append(
+                ImageContent(
+                    base64.b64encode(image_bytes).decode("ascii"),
+                    mime_type,
+                )
+            )
+        hydrated.append(replace(message, content=tuple(blocks)))
+    return replace(request, messages=tuple(hydrated))
+
+
+def _validate_agent_image(image_bytes: bytes, mime_type: str) -> None:
+    try:
+        with Image.open(BytesIO(image_bytes)) as image:
+            width, height = image.size
+            if (
+                image.format != _AGENT_IMAGE_FORMATS[mime_type]
+                or width <= 0
+                or height <= 0
+                or width > _MAX_AGENT_IMAGE_DIMENSION
+                or height > _MAX_AGENT_IMAGE_DIMENSION
+                or width * height > _MAX_AGENT_IMAGE_PIXELS
+            ):
+                raise RuntimeError("agent_attachment_invalid")
+            image.verify()
+    except RuntimeError:
+        raise
+    except (Image.DecompressionBombError, OSError, ValueError) as error:
+        raise RuntimeError("agent_attachment_invalid") from error
 
 
 def _system_prompt_for_project(system_prompt: str, project_id: str) -> str:
@@ -637,6 +881,7 @@ def _system_prompt_for_project(system_prompt: str, project_id: str) -> str:
     instructions = (
         f"{project_instruction}\n\n{_ASYNC_JOB_CONTRACT}\n\n"
         f"{_IMAGE_PRESENTATION_CONTRACT}\n\n{_TOOL_SELECTION_CONTRACT}\n\n"
+        f"{_IMAGE_TOOL_DECISION_CONTRACT}\n\n"
         f"{_FINAL_RESPONSE_CONTRACT}"
     )
     return f"{base}\n\n{instructions}" if base else instructions
@@ -667,18 +912,35 @@ def _profile_from_dict(value: dict[str, Any]) -> ModelProfile:
 
 
 def _upgrade_profile_defaults(profile: ModelProfile) -> tuple[ModelProfile, bool]:
-    """Replace the former hard-coded 256-token DeepSeek budget on recovery."""
+    """Replace obsolete Provider token budgets when reopening durable sessions."""
 
-    if profile.provider_id != "deepseek" or profile.max_output_tokens != 256:
-        return profile, False
-    return (
-        create_deepseek_profile(
-            base_url=profile.base_url,
-            model=profile.model,
-            timeout_seconds=profile.timeout_seconds,
-        ),
-        True,
-    )
+    if profile.provider_id == "deepseek" and profile.max_output_tokens == 256:
+        return (
+            create_deepseek_profile(
+                base_url=profile.base_url,
+                model=profile.model,
+                timeout_seconds=profile.timeout_seconds,
+            ),
+            True,
+        )
+    if (
+        profile.provider_id == OLLAMA_PROVIDER_ID
+        and profile.model in QWEN3_VL_SUPPORTED_MODELS
+        and profile.max_output_tokens in _LEGACY_QWEN3_VL_MAX_OUTPUT_TOKENS
+    ):
+        return (
+            create_qwen3_vl_profile(
+                base_url=profile.base_url,
+                model=profile.model,
+                timeout_seconds=(
+                    QWEN3_VL_DEFAULT_TIMEOUT_SECONDS
+                    if profile.timeout_seconds == _LEGACY_QWEN3_VL_TIMEOUT_SECONDS
+                    else profile.timeout_seconds
+                ),
+            ),
+            True,
+        )
+    return profile, False
 
 
 def _event_dto(conversation_id: str, event: AgentEvent) -> tuple[str, dict[str, object]] | None:
@@ -694,6 +956,15 @@ def _event_dto(conversation_id: str, event: AgentEvent) -> tuple[str, dict[str, 
             return None
         if provider.get("type") == "text_delta":
             return "message.delta", {**base, "text": _safe_text(str(provider.get("delta", "")))}
+        if provider.get("type") == "reasoning_start":
+            return "reasoning.started", base
+        if provider.get("type") == "reasoning_delta":
+            return "reasoning.delta", {
+                **base,
+                "text": _safe_text(str(provider.get("delta", ""))),
+            }
+        if provider.get("type") == "reasoning_end":
+            return "reasoning.completed", base
         if provider.get("type") in {
             "tool_call_start",
             "tool_call_arguments_delta",
@@ -752,7 +1023,13 @@ def _message_dto(message: Message) -> dict[str, object]:
         return {
             "id": message.id,
             "role": "assistant",
-            "content": [_content_block_dto(item) for item in message.content],
+            # Keep provider reasoning in the private transcript for Tool-call
+            # signatures, but never expose it through the desktop API.
+            "content": [
+                _content_block_dto(item)
+                for item in message.content
+                if not isinstance(item, ThinkingContent)
+            ],
             "stop_reason": message.stop_reason,
             "error_message": _safe_text(message.error_message) if message.error_message else None,
         }
@@ -794,7 +1071,7 @@ def _content_block_dto(item: object) -> dict[str, object]:
     return {"type": "unknown"}
 
 
-def _tool_call_dto_from_raw(value: dict[str, object]) -> dict[str, object]:
+def _tool_call_dto_from_raw(value: Mapping[str, object]) -> dict[str, object]:
     try:
         return _content_block_dto(
             ToolCall(
@@ -803,7 +1080,7 @@ def _tool_call_dto_from_raw(value: dict[str, object]) -> dict[str, object]:
                 cast(dict[str, Any], value.get("arguments", {})),
             )
         )
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return {"type": "tool_call", "id": "", "name": "", "arguments": {}}
 
 
@@ -837,17 +1114,39 @@ def _safe_error_code(error: Exception) -> str:
     return str(code) if isinstance(code, str) and code else "agent_error"
 
 
+def _safe_provider_reason(error: Exception) -> str | None:
+    """Return only an allowlisted Provider diagnostic, never raw response data."""
+
+    if _safe_error_code(error) != "provider_error":
+        return None
+    details = getattr(error, "details", None)
+    reason = details.get("error_code") if isinstance(details, dict) else None
+    allowed = {
+        "context_overflow",
+        "model_load_failed",
+        "provider_internal",
+        "request_format",
+        "resource_exhausted",
+        "runner_unavailable",
+        "vision_request",
+    }
+    return reason if isinstance(reason, str) and reason in allowed else None
+
+
 def _failure_terminal_message() -> AssistantMessage:
-    return _sanitize_message(
-        AssistantMessage(
-            (
-                TextContent(
-                    "I completed the available tool steps, but I could not finish the final response. Please try again; your completed tool results are still available in this conversation."
+    return cast(
+        AssistantMessage,
+        _sanitize_message(
+            AssistantMessage(
+                (
+                    TextContent(
+                        "I completed the available tool steps, but I could not finish the final response. Please try again; your completed tool results are still available in this conversation."
+                    ),
                 ),
-            ),
-            stop_reason="error",
-            error_message="The Agent stopped before it could finish its response.",
-        )
+                stop_reason="error",
+                error_message="The Agent stopped before it could finish its response.",
+            )
+        ),
     )
 
 
@@ -958,9 +1257,7 @@ def _project_model_context(messages: tuple[Message, ...]) -> tuple[Message, ...]
 def _project_tool_result_for_model(message: Message) -> Message:
     if not isinstance(message, ToolResultMessage):
         return message
-    text = "\n".join(
-        block.text for block in message.content if isinstance(block, TextContent)
-    )
+    text = "\n".join(block.text for block in message.content if isinstance(block, TextContent))
     if len(text) <= _MODEL_TOOL_RESULT_TEXT_LIMIT:
         return message
     return ToolResultMessage(

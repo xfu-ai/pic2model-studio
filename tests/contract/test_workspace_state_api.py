@@ -87,6 +87,34 @@ def test_workspace_state_is_whitelisted_persisted_and_idempotent(tmp_path: Path)
         "target_triangles": 50_000,
         "generation_job_id": "generation-job-1",
     }
+    candidate_handoff = {
+        "state": {
+            "workspace_mode": "candidate",
+            "candidate_result": {
+                "job_id": "candidate-job-1",
+                "asset_ids": ["candidate-a", "candidate-b"],
+            },
+            "reference_context": {
+                "suitability_asset_id": "source-image",
+                "suitability_analysis_asset_id": "suitability-report",
+            },
+        },
+        "request_id": "workspace-candidate-1",
+    }
+    candidate_response = client.patch(
+        f"/v1/projects/{project['id']}/workspace-state",
+        headers={**headers, "X-Request-Id": "workspace-candidate-1"},
+        json=candidate_handoff,
+    )
+    assert candidate_response.status_code == 200
+    assert candidate_response.json()["candidate_result"] == {
+        "job_id": "candidate-job-1",
+        "asset_ids": ["candidate-a", "candidate-b"],
+    }
+    assert candidate_response.json()["reference_context"] == {
+        "suitability_asset_id": "source-image",
+        "suitability_analysis_asset_id": "suitability-report",
+    }
     extraction_handoff = {
         "state": {
             "workspace_mode": "target_extract",

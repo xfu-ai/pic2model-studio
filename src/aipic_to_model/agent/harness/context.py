@@ -115,13 +115,24 @@ def should_compact(tokens: int, context_window: int, settings: CompactionSetting
 
 
 def clamp_max_output_tokens(
-    messages: tuple[Message, ...], context_window: int, max_output_tokens: int
+    messages: tuple[Message, ...],
+    context_window: int,
+    max_output_tokens: int,
+    tools: tuple[dict[str, object], ...] = (),
 ) -> int:
     """Mirror Pi's per-request output clamp against the remaining context."""
 
     if context_window <= 0:
         return max(1, max_output_tokens)
-    available = context_window - estimate_context_tokens(messages).tokens - CONTEXT_SAFETY_TOKENS
+    tool_tokens = (
+        len(json.dumps(tools, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) + 3
+    ) // 4
+    available = (
+        context_window
+        - estimate_context_tokens(messages).tokens
+        - tool_tokens
+        - CONTEXT_SAFETY_TOKENS
+    )
     return min(max_output_tokens, max(1, available))
 
 

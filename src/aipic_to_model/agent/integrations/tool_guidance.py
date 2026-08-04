@@ -11,8 +11,8 @@ from ...domain.tools import ToolManifestV1
 
 _AGENT_TOOL_GUIDANCE: dict[str, tuple[str, str]] = {
     "project.get_state": (
-        "Use when you need the managed project's identity or persisted project state.",
-        "Do not use for current assets, active jobs, provider availability, or live workspace UI state.",
+        "Use when you need the managed project's identity or persisted workflow state, including a manually confirmed multiview set and its front, side, and back crop assets.",
+        "Do not use for active jobs, provider availability, or unsaved pointer movement in the live UI. Before multiview region detection or 3D generation, prefer confirmed multiview crops from this state and never run detection when a confirmed set already exists.",
     ),
     "project.save_checkpoint": (
         "Use after meaningful local changes when the user asks to save or checkpoint the project.",
@@ -83,8 +83,8 @@ _AGENT_TOOL_GUIDANCE: dict[str, tuple[str, str]] = {
         "Do not use when the user needs the clean cropped pixels instead.",
     ),
     "image.analyze_content": (
-        "Use when semantic subject, composition, or scene analysis of a known image is needed.",
-        "Do not use for style-only analysis or when existing prompt analysis is already sufficient.",
+        "Use only when the user explicitly requests a persisted semantic subject, composition, or scene analysis, or when that persisted analysis is explicitly required for prompt extraction.",
+        "Do not use for routine Agent image comprehension, style-only analysis, an already sufficient analysis, or immediately after image.understand_for_agent for the same question.",
     ),
     "image.analyze_style": (
         "Use when visual style, palette, lighting, texture, or rendering-language analysis is needed.",
@@ -159,8 +159,8 @@ _AGENT_TOOL_GUIDANCE: dict[str, tuple[str, str]] = {
         "Do not use when a complete multiview sheet already exists or without external approval.",
     ),
     "multiview.detect_regions": (
-        "Use to detect front, side, and back rectangles on an existing multiview sheet.",
-        "Do not crop or confirm the detected regions automatically.",
+        "Use only when the user explicitly requests experimental automatic detection of front, side, and back rectangles on an existing multiview sheet that has no saved crops.",
+        "Do not use as the normal three-view workflow, after three manually confirmed crops exist, or to replace the user's crop decision. Those persisted crops are authoritative. Do not crop or confirm detected regions automatically.",
     ),
     "multiview.request_box_confirmation": (
         "Use after regions exist to send the user to the Multiview workspace for manual boundary review.",
@@ -175,16 +175,16 @@ _AGENT_TOOL_GUIDANCE: dict[str, tuple[str, str]] = {
         "Do not use on unconfirmed, missing, or overlapping regions.",
     ),
     "multiview.request_quality_confirmation": (
-        "Use after view crops exist to ask the user for the six required quality checks in the Multiview workspace.",
-        "Do not submit 3D generation before this confirmation completes.",
+        "Use only when the user explicitly asks to record an optional quality review of existing crops.",
+        "Do not call it as a prerequisite for 3D generation; confirmed crop assets are already authoritative.",
     ),
     "multiview.set_quality_checks": (
-        "Use to persist the user's explicit multiview quality decisions.",
+        "Use only to persist an optional quality review explicitly supplied by the user.",
         "Do not manufacture positive checks or override a failed check.",
     ),
     "multiview.validate": (
         "Use when provider vision should evaluate an existing multiview set for 3D consistency.",
-        "Do not use as the user's required manual quality confirmation.",
+        "Do not use it as a prerequisite for 3D generation or as a substitute for crop confirmation.",
     ),
     "multiview.regenerate_view": (
         "Use when the user requests repair of one named front, side, or back view in an existing multiview set.",
@@ -193,11 +193,13 @@ _AGENT_TOOL_GUIDANCE: dict[str, tuple[str, str]] = {
     "model3d.generate": (
         "Use to submit an approved image-to-3D or multiview-to-3D request from managed inputs.",
         (
+            "For multiview mode, copy multiview_set_id only from the persisted workspace set_id; "
+            "never substitute the source sheet asset ID or a crop asset ID. "
             "Choose a geometry budget before approval: use 50,000 faces for real-time/game use, "
             "100,000 for a general-purpose default, and raise it only for an explicit close-up or "
             "high-detail requirement. Ask the user when the target use is unclear and the budget would "
             "materially affect the result. Do not use an unlimited Provider face budget. Do not call "
-            "without suitable inputs, required quality confirmation, provider profile, and user approval."
+            "without suitable inputs, confirmed crop assets, provider profile, and user approval."
         ),
     ),
     "model3d.get_status": (

@@ -23,12 +23,13 @@ _AUTO_IMAGE_MODEL = "auto"
 _TRIPO_PROFILE = "tripo3d/default"
 _TRIPO_MODEL = "tripo-v2.5-20250123"
 RuntimeContext = Callable[[], Mapping[str, object]]
+PromptCreator = Callable[[AIPicToolInvocation, str, str], str]
 
 FACADE_TOOL_NAMES = (
     "inspect_workspace",
     "select_asset",
     "analyze_image",
-    "prepare_prompt",
+    "understand_image",
     "generate_images",
     "edit_image",
     "split_image",
@@ -39,7 +40,9 @@ FACADE_TOOL_NAMES = (
 )
 
 
-def _facade_agent_result(result: ToolResultV1, tool_call_id: str) -> ToolResult:
+def _facade_agent_result(
+    result: ToolResultV1, tool_call_id: str, *, prompt_asset_id: str | None = None
+) -> ToolResult:
     """Expose continuation-critical opaque refs in model-visible Tool content.
 
     ``ToolResult.details`` is durable UI metadata, but provider protocol adapters
@@ -58,12 +61,20 @@ def _facade_agent_result(result: ToolResultV1, tool_call_id: str) -> ToolResult:
     }
     if isinstance(job_ref, str) and job_ref:
         continuation["job_ref"] = job_ref
+    if prompt_asset_id:
+        continuation["prompt_asset_ref"] = prompt_asset_id
     if result.reused:
         continuation["reused"] = True
-    if not continuation["output_asset_refs"] and "job_ref" not in continuation:
+    if not continuation["output_asset_refs"] and "job_ref" not in continuation and not prompt_asset_id:
         return converted
+    details = dict(cast(dict[str, object], converted.details or {}))
+    if prompt_asset_id:
+        data = dict(cast(dict[str, object], details.get("data", {})))
+        data["prompt_asset_id"] = prompt_asset_id
+        details["data"] = data
     return replace(
         converted,
+        details=details,
         content=(
             TextContent(
                 f"{result.summary}\nFacade result: "
@@ -186,8 +197,11 @@ FACADE_TOOL_SPECS = (
         "Analyze image",
         (
             "Analyze one managed image for exactly one requested purpose: content, style, or "
-            "3D suitability. Reuse existing analysis unless refresh is true because the user "
-            "explicitly requested a fresh analysis. Do not generate or edit images."
+            "3D suitability. Use only when the user explicitly requests a persisted workflow "
+            "analysis or that analysis is explicitly required as prompt-workflow input. Reuse "
+            "existing analysis unless refresh is true because the user explicitly requested a "
+            "fresh analysis. Do not call after understand_image for the same purpose, and do "
+            "not generate or edit images."
         ),
         _object(
             {
@@ -199,24 +213,23 @@ FACADE_TOOL_SPECS = (
         ),
     ),
     FacadeToolSpec(
-        "prepare_prompt",
-        "Prepare prompt",
+        "understand_image",
+        "Understand image",
         (
-            "Create or maintain managed prompts. Use extract with one content/style analysis, "
-            "merge with separate content and style prompts, rewrite with one prompt and a "
-            "concrete instruction, or validate with one prompt. Do not generate images."
+            "Answer one concrete question about a managed image for the text-only Agent. "
+            "It returns grounded plain text directly to the Agent and does not create an analysis "
+            "asset, prompt, Job, comparison, or workspace change. Use this for ordinary visual "
+            "understanding. Use analyze_image only when the user explicitly wants a persisted "
+            "content/style/3D-suitability workflow analysis. Do not call analyze_image for the "
+            "same image and purpose afterwards. Do not use this Tool to create workflow analysis, "
+            "prompts, or visual assets."
         ),
         _object(
             {
-                "task": {"enum": ["extract", "merge", "rewrite", "validate"]},
-                "analysis_asset_ref": _REF,
-                "analysis_kind": {"enum": ["content", "style"]},
-                "content_prompt_ref": _REF,
-                "style_prompt_ref": _REF,
-                "prompt_asset_ref": _REF,
-                "instruction": {"type": "string", "minLength": 1, "maxLength": 4000},
+                "source_asset_ref": _REF,
+                "question": {"type": "string", "minLength": 1, "maxLength": 4000},
             },
-            ("task",),
+            ("source_asset_ref", "question"),
         ),
     ),
     FacadeToolSpec(
@@ -231,6 +244,7 @@ FACADE_TOOL_SPECS = (
         _object(
             {
                 "mode": {"enum": ["from_prompt", "from_image", "variants"]},
+                "prompt": {"type": "string", "minLength": 1, "maxLength": 20_000},
                 "prompt_asset_ref": _REF,
                 "source_asset_ref": _REF,
                 "candidate_count": {"type": "integer", "enum": [1, 2, 4]},
@@ -239,8 +253,10 @@ FACADE_TOOL_SPECS = (
                 "quality": {"type": "string", "minLength": 1, "maxLength": 32},
                 "output_format": {"enum": ["png", "jpg", "webp"]},
                 "structure_strength": {"type": "number", "minimum": 0, "maximum": 1},
+                "seed": {"type": "integer", "minimum": 0, "maximum": 2_147_483_647},
+                "steps": {"type": "integer", "minimum": 1, "maximum": 20},
             },
-            ("mode", "prompt_asset_ref", "candidate_count"),
+            ("mode", "candidate_count"),
         ),
     ),
     FacadeToolSpec(
@@ -331,10 +347,14 @@ FACADE_TOOL_SPECS = (
         "prepare_multiview",
         "Prepare multiview",
         (
-            "Create, inspect, or repair a managed front-side-back multiview set. Use create "
-            "from one source image, detect_regions for an existing multiview set, and "
-            "regenerate_view for exactly one view. Region and quality confirmation remain "
-            "user actions. Do not use it to generate a 3D model."
+            "Create a front-side-back sheet, or inspect or repair a managed multiview set. Use create "
+            "from one source image; its result is a sheet asset, not a multiview-set reference. "
+            "Use detect_regions only when the user explicitly asks for experimental automatic "
+            "region detection on an existing persisted multiview set that has no saved front, "
+            "side, and back crops, and "
+            "regenerate_view for exactly one view. Region confirmation remains a user action; "
+            "a separate quality checkbox is not required. A confirmed set with distinct front, side, and back crop assets must "
+            "go directly to 3D generation without detection. Do not use it to generate a 3D model."
         ),
         _object(
             {
@@ -354,6 +374,9 @@ FACADE_TOOL_SPECS = (
             "Generate one managed 3D model from exactly one suitable image or one confirmed "
             "front-side-back multiview set. This paid external operation always requires "
             "parameter-bound approval and always requests textures plus PBR material maps. "
+            "For multiview mode, multiview_ref is the persisted set_id from the workspace "
+            "summary, never the source sheet asset reference; view_asset_refs are the three "
+            "distinct confirmed crop asset references. "
             "Do not inspect, preview, convert, optimize, package, import, or export models "
             "with this tool."
         ),
@@ -424,7 +447,7 @@ FACADE_TOOL_SPECS = (
 
 _PARAMETER_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "inspect_workspace": {
-        "view": "Required query to run: summary=current project; assets=managed assets; asset_details=one asset; compare=exactly two assets; jobs=one known job; capabilities=current non-secret runtime readiness.",
+        "view": "Required query to run: summary=current project and persisted workflow state (including confirmed multiview crops); assets=managed assets; asset_details=one asset; compare=exactly two assets; jobs=one known job; capabilities=current non-secret runtime readiness.",
         "asset_refs": "Opaque managed asset references. Required only for asset_details (exactly one) or compare (exactly two); omit for every other view.",
         "job_ref": "Opaque durable job reference. Required only when view is jobs; omit otherwise.",
         "group": "Optional exact managed asset group filter. Valid only when view is assets. Use generated_images (plural) for generated pictures.",
@@ -438,18 +461,14 @@ _PARAMETER_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "analysis_type": "Exactly one analysis purpose: visible content, visual style, or suitability for 3D generation.",
         "refresh": "Set true only when the user explicitly asks to replace/re-run an existing matching analysis; otherwise omit or false.",
     },
-    "prepare_prompt": {
-        "task": "Prompt operation: extract from one analysis, merge content and style prompts, rewrite one prompt, or validate one prompt.",
-        "analysis_asset_ref": "Required only for extract: opaque reference of one completed analysis asset.",
-        "analysis_kind": "Required only for extract and must match the analysis asset: content or style.",
-        "content_prompt_ref": "Required only for merge: opaque reference of the managed content prompt.",
-        "style_prompt_ref": "Required only for merge: opaque reference of the managed style prompt.",
-        "prompt_asset_ref": "Required only for rewrite or validate: opaque reference of the existing managed prompt.",
-        "instruction": "Required only for rewrite: concrete requested change; do not repeat the full prompt.",
+    "understand_image": {
+        "source_asset_ref": "Opaque reference of the managed image the text-only Agent must understand.",
+        "question": "A concrete visual question to answer from this image. The result is plain text for Agent reasoning only; it is not saved as a content/style analysis.",
     },
     "generate_images": {
         "mode": "Generation route: from_prompt has no source image; from_image transforms one source; variants creates alternatives of one source.",
-        "prompt_asset_ref": "Opaque reference of the validated managed prompt that drives generation.",
+        "prompt": "Write the complete generation instruction directly. The desktop stores it as an immutable managed Prompt and shows it with the generated images in the image-generation workspace. Do not call a separate prompt-preparation tool.",
+        "prompt_asset_ref": "Existing managed prompt reference. Use only when intentionally reusing a user-authored or previously generated Prompt; otherwise write prompt directly.",
         "source_asset_ref": "Required for from_image and variants; forbidden for from_prompt. Opaque reference of one managed image.",
         "candidate_count": "Number of candidates to create in this approved request: 1, 2, or 4.",
         "aspect_ratio": "Optional provider-supported aspect ratio such as 1:1, 16:9, or 9:16.",
@@ -457,6 +476,8 @@ _PARAMETER_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "quality": "Optional provider-supported output quality label.",
         "output_format": "Optional managed image encoding: png, jpg, or webp.",
         "structure_strength": "Optional source-structure adherence from 0 (loose) through 1 (strict); only meaningful with a source image.",
+        "seed": "Optional deterministic generation seed from 0 through 2147483647.",
+        "steps": "Optional local denoising step count from 1 through 20.",
     },
     "edit_image": {
         "operation": "Exactly one edit. Names ending in _local and trim_transparent/normalize are offline; the original upscale/remove_background/inpaint/export_transparent routes remain Provider operations.",
@@ -508,7 +529,7 @@ _PARAMETER_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "generate_model3d": {
         "mode": "Input mode: image uses one image_asset_ref; multiview uses one confirmed multiview_ref plus all three view_asset_refs.",
         "image_asset_ref": "Required only for image mode: opaque reference of one suitable managed image.",
-        "multiview_ref": "Required only for multiview mode: opaque reference of the confirmed managed multiview set.",
+        "multiview_ref": "Required only for multiview mode: the confirmed set_id exposed by the persisted workspace summary. This is not the source sheet asset reference and not any crop asset reference.",
         "view_asset_refs": "Required only for multiview mode: exact front, side, and back managed image references from that set.",
         "parameters": "Complete parameter object to bind into user approval. Use an empty object to accept application defaults.",
     },
@@ -632,8 +653,11 @@ class AIPicFacadeTool:
         spec: FacadeToolSpec,
         invocation: Callable[[], AIPicToolInvocation],
         runtime_context: RuntimeContext | None = None,
+        prompt_creator: PromptCreator | None = None,
     ) -> None:
-        self._dispatcher = _FacadeDispatcher(registry, invocation, runtime_context)
+        self._dispatcher = _FacadeDispatcher(
+            registry, invocation, runtime_context, prompt_creator
+        )
         self.name = spec.name
         self.label = spec.label
         self.description = spec.description
@@ -665,10 +689,12 @@ class _FacadeDispatcher:
         registry: AIPicToolRegistry,
         invocation: Callable[[], AIPicToolInvocation],
         runtime_context: RuntimeContext | None = None,
+        prompt_creator: PromptCreator | None = None,
     ) -> None:
         self._registry = registry
         self._invocation = invocation
         self._runtime_context = runtime_context
+        self._prompt_creator = prompt_creator
 
     async def execute(
         self,
@@ -678,6 +704,27 @@ class _FacadeDispatcher:
         cancellation: CancellationToken,
     ) -> ToolResult:
         try:
+            materialized_prompt_id: str | None = None
+            prompt = arguments.get("prompt")
+            if prompt is not None:
+                if not isinstance(prompt, str) or not prompt.strip():
+                    raise ValueError("prompt must be a non-empty string.")
+                if facade_name != "generate_images":
+                    raise ValueError("Direct prompt text is supported only for generate_images.")
+                if arguments.get("prompt_asset_ref"):
+                    raise ValueError("Use prompt or prompt_asset_ref, not both.")
+                if self._prompt_creator is None:
+                    raise ValueError("Direct prompt generation is unavailable.")
+                invocation = self._invocation()
+                materialized_prompt_id = await cancellation.wait_for(
+                    asyncio.to_thread(
+                        self._prompt_creator,
+                        invocation,
+                        prompt.strip(),
+                        _tool_request_id(invocation.request_id, tool_call_id),
+                    )
+                )
+                arguments = {**arguments, "prompt_asset_ref": materialized_prompt_id}
             internal_name, internal_arguments = self._translate(facade_name, arguments)
             if internal_name == "__facade_capabilities__":
                 payload = dict(self._runtime_context()) if self._runtime_context else {
@@ -724,7 +771,9 @@ class _FacadeDispatcher:
             )
             if facade_name == "inspect_workspace" and arguments.get("view") == "assets":
                 result = _newest_assets_first(result)
-            return _facade_agent_result(result, tool_call_id)
+            return _facade_agent_result(
+                result, tool_call_id, prompt_asset_id=materialized_prompt_id
+            )
         except DomainErrorV1 as error:
             payload = error.as_dict()
             summary = str(payload.get("user_message") or "Tool execution failed.")
@@ -842,6 +891,16 @@ class _FacadeDispatcher:
             if bool(arguments.get("refresh")) and analysis_type in {"content", "style"}:
                 payload["analysis_revision"] = "user-requested-refresh"
             return name, payload
+        if facade_name == "understand_image":
+            return (
+                "image.understand_for_agent",
+                {
+                    "asset_id": _required_str(arguments, "source_asset_ref"),
+                    "question": _required_str(arguments, "question"),
+                    "provider_profile": _GEMINI_PROFILE,
+                    "model": _GEMINI_MODEL,
+                },
+            )
         if facade_name == "prepare_prompt":
             return self._prepare_prompt(arguments)
         if facade_name == "generate_images":
@@ -989,6 +1048,8 @@ class _FacadeDispatcher:
             ("quality", "quality"),
             ("output_format", "output_format"),
             ("structure_strength", "structure_strength"),
+            ("seed", "seed"),
+            ("steps", "steps"),
         ):
             if source in arguments:
                 payload[target] = arguments[source]
@@ -1187,11 +1248,12 @@ def facade_tools(
     registry: AIPicToolRegistry,
     invocation: Callable[[], AIPicToolInvocation],
     runtime_context: RuntimeContext | None = None,
+    prompt_creator: PromptCreator | None = None,
 ) -> tuple[AIPicFacadeTool, ...]:
-    """Return the fixed eleven business facades in documented order."""
+    """Return the fixed business facades in documented order."""
 
     return tuple(
-        AIPicFacadeTool(registry, spec, invocation, runtime_context)
+        AIPicFacadeTool(registry, spec, invocation, runtime_context, prompt_creator)
         for spec in FACADE_TOOL_SPECS
     )
 

@@ -1,10 +1,61 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MULTIVIEW_BASE_PROMPT } from "../../shared/prompts/productionPrompts";
 import { MultiviewWorkspace } from "./MultiviewWorkspace";
 
 const sheet = { id: "sheet", name: "front-side-back.png", asset_type: "multiview", is_current: true, metadata: { width: 768, height: 256 } };
 describe("MultiviewWorkspace", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses CSP-compatible blob URLs for the three crop previews", async () => {
+    let objectUrlIndex = 0;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn().mockImplementation(() => (
+        objectUrlIndex++ === 0
+          ? "blob:source"
+          : `blob:crop-preview-${objectUrlIndex}`
+      )),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn(),
+    } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(
+      (callback) => callback(new Blob(["preview"], { type: "image/jpeg" })),
+    );
+    vi.stubGlobal("Image", class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    });
+    const api = {
+      assets: vi.fn().mockResolvedValue([sheet]),
+      assetContent: vi.fn().mockResolvedValue(new Blob(["sheet"])),
+    };
+
+    render(<MultiviewWorkspace
+      projectId="project-1"
+      api={api as never}
+      onQueued={vi.fn()}
+    />);
+
+    const previews = await screen.findAllByRole("img", { name: /预览$/ });
+    expect(previews).toHaveLength(3);
+    expect(previews.every((preview) => (
+      preview.getAttribute("src")?.startsWith("blob:crop-preview-")
+    ))).toBe(true);
+  });
 
   it("opens the native chooser from the prominent source action and selects the import", async () => {
     const imported = {
@@ -139,7 +190,7 @@ describe("MultiviewWorkspace", () => {
     );
   });
 
-  it("rejects a restored multi-output job because the current contract requires one sheet", async () => {
+  it("restores a persisted confirmed crop set without rerunning the generation job", async () => {
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn().mockReturnValue("blob:sheet"),
@@ -181,12 +232,10 @@ describe("MultiviewWorkspace", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(api.job).toHaveBeenCalledWith("project-1", "old-job"),
-    );
-    expect(
-      screen.queryByLabelText("AI 生成的独立三视图"),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByLabelText("AI 生成的独立三视图")).toBeVisible();
+    expect(api.job).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("我已确认三张视图与质量")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认裁切并进入 3D 模型处理" })).toBeEnabled();
   });
 
   it("preserves a restored generated sheet and its crop state without reapplying its completed job", async () => {
@@ -230,9 +279,7 @@ describe("MultiviewWorkspace", () => {
 
     await screen.findByAltText("三视图拼图");
     expect(api.job).not.toHaveBeenCalled();
-    expect(
-      screen.getByLabelText("我已确认三张视图与质量"),
-    ).toBeChecked();
+    expect(screen.queryByLabelText("我已确认三张视图与质量")).not.toBeInTheDocument();
     expect(
       (container.querySelector('[data-view="front"]') as HTMLElement).style
         .left,
@@ -287,17 +334,27 @@ describe("MultiviewWorkspace", () => {
     expect(screen.getByRole("status")).toHaveTextContent("三视图仍在生成：generating");
   });
 
-  it("restores the recovered three-column sheet editor and requires an explicit quality confirmation", async () => {
+  it("enables 3D submission as soon as the recovered crop regions are confirmed", async () => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn().mockReturnValue("blob:sheet") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
-    const api = { assets: vi.fn().mockResolvedValue([sheet]), assetContent: vi.fn().mockResolvedValue(new Blob(["image"])) };
+    const api = {
+      assets: vi.fn().mockResolvedValue([sheet]),
+      assetContent: vi.fn().mockResolvedValue(new Blob(["image"])),
+      createMultiviewSet: vi.fn().mockResolvedValue({ id: "set-1" }),
+      invokeTool: vi.fn().mockImplementation((_projectId: string, tool: string) =>
+        Promise.resolve(tool === "multiview.crop_views"
+          ? { ok: true, output_asset_ids: ["front", "side", "back"] }
+          : { ok: true, output_asset_ids: [] })),
+    };
     render(<MultiviewWorkspace projectId="project-1" api={api as never} onQueued={vi.fn()} />);
     await screen.findByAltText("三视图拼图");
     expect(screen.getByRole("heading", { name: "① 来源与生成" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "③ 输出与建模" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "确认三视图并进入 3D 模型处理" })).toBeDisabled();
-    fireEvent.click(screen.getByLabelText("我已确认三张视图与质量"));
-    expect(screen.getByRole("button", { name: "确认三视图并进入 3D 模型处理" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "确认裁切并进入 3D 模型处理" })).toBeDisabled();
+    expect(screen.queryByLabelText("我已确认三张视图与质量")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认裁切框并生成三张视图" }));
+    await screen.findByRole("button", { name: "重新调整裁切框" });
+    expect(screen.getByRole("button", { name: "确认裁切并进入 3D 模型处理" })).toBeEnabled();
   });
 
   it("moves and resizes a view region with the same direct manipulation used by other selection canvases", async () => {
@@ -358,6 +415,55 @@ describe("MultiviewWorkspace", () => {
     });
   });
 
+  it("persists confirmed crop assets and invalidates them before region editing resumes", async () => {
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn().mockReturnValue("blob:sheet") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    const api = {
+      assets: vi.fn().mockResolvedValue([sheet]),
+      assetContent: vi.fn().mockResolvedValue(new Blob(["image"])),
+      createMultiviewSet: vi.fn().mockResolvedValue({ id: "confirmed-set" }),
+      invokeTool: vi.fn().mockImplementation((_projectId: string, tool: string) =>
+        Promise.resolve(tool === "multiview.crop_views"
+          ? { ok: true, output_asset_ids: ["crop-front", "crop-side", "crop-back"] }
+          : { ok: true, output_asset_ids: [] })),
+    };
+    const onWorkflowContextChange = vi.fn();
+    render(
+      <MultiviewWorkspace
+        projectId="project-1"
+        api={api as never}
+        onQueued={vi.fn()}
+        onWorkflowContextChange={onWorkflowContextChange}
+      />,
+    );
+
+    await screen.findByAltText("三视图拼图");
+    fireEvent.click(screen.getByRole("button", { name: "确认裁切框并生成三张视图" }));
+    await screen.findByRole("button", { name: "重新调整裁切框" });
+    await waitFor(() => expect(onWorkflowContextChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        selected: {
+          source: "sheet",
+          front: "crop-front",
+          side: "crop-side",
+          back: "crop-back",
+        },
+        set_id: "confirmed-set",
+        quality_confirmed: false,
+      }),
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "重新调整裁切框" }));
+    expect(await screen.findByRole("button", { name: "确认裁切框并生成三张视图" })).toBeEnabled();
+    await waitFor(() => expect(onWorkflowContextChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        selected: { source: "sheet", front: "sheet", side: "sheet", back: "sheet" },
+        set_id: null,
+        quality_confirmed: false,
+      }),
+    ));
+  });
+
   it("saves a managed prompt then requires approval before generating the sheet", async () => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn().mockReturnValue("blob:sheet") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
@@ -365,11 +471,19 @@ describe("MultiviewWorkspace", () => {
     render(<MultiviewWorkspace projectId="project-1" api={api as never} onQueued={vi.fn()} />);
     await screen.findByAltText("三视图拼图");
     fireEvent.click(screen.getByRole("button", { name: "自动拆分三视图" }));
+    await waitFor(() => expect(api.savePromptVersion).toHaveBeenCalledWith(
+      "project-1",
+      expect.objectContaining({
+        kind: "multiview",
+        enPrompt: MULTIVIEW_BASE_PROMPT,
+      }),
+      expect.any(String),
+    ));
     await waitFor(() => expect(api.invokeTool).toHaveBeenCalledWith("project-1", "multiview.generate", expect.objectContaining({ source_asset_id: "sheet", prompt_asset_id: "prompt-1", provider_profile: "image-generation/auto", channel: "auto", model: "auto" }), expect.any(String), { providerProfile: "image-generation/auto" }));
     expect(screen.getByText("确认外部图像生成")).toBeInTheDocument();
   });
 
-  it("crops the final views before persisting all six quality checks and asking for 3D approval", async () => {
+  it("crops the final views before asking for 3D approval without a second quality gate", async () => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn().mockReturnValue("blob:sheet") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
     const api = {
@@ -404,17 +518,9 @@ describe("MultiviewWorkspace", () => {
         { asset_id: null, target_triangles: 5000, generation_job_id: null },
       ),
     );
-    fireEvent.click(screen.getByLabelText("我已确认三张视图与质量"));
-    fireEvent.click(screen.getByRole("button", { name: "确认三视图并进入 3D 模型处理" }));
-    await waitFor(() => expect(api.invokeTool).toHaveBeenCalledWith(
-      "project-1",
-      "multiview.set_quality_checks",
-      { multiview_set_id: "set-1", checks: {
-        subject_scale: "passed", direction: "passed", key_accessory: "passed",
-        truncation: "passed", background: "passed", resolution: "passed",
-      } },
-      expect.any(String),
-    ));
+    fireEvent.click(screen.getByRole("button", { name: "确认裁切框并生成三张视图" }));
+    await screen.findByRole("button", { name: "重新调整裁切框" });
+    fireEvent.click(screen.getByRole("button", { name: "确认裁切并进入 3D 模型处理" }));
     await waitFor(() => expect(api.invokeTool).toHaveBeenCalledWith(
       "project-1",
       "model3d.generate",
@@ -438,10 +544,8 @@ describe("MultiviewWorkspace", () => {
     expect(toolCalls.indexOf("multiview.set_regions")).toBeLessThan(
       toolCalls.indexOf("multiview.crop_views"),
     );
+    expect(toolCalls).not.toContain("multiview.set_quality_checks");
     expect(toolCalls.indexOf("multiview.crop_views")).toBeLessThan(
-      toolCalls.indexOf("multiview.set_quality_checks"),
-    );
-    expect(toolCalls.indexOf("multiview.set_quality_checks")).toBeLessThan(
       toolCalls.indexOf("model3d.generate"),
     );
   });
@@ -537,9 +641,10 @@ describe("MultiviewWorkspace", () => {
     expect(
       screen.queryByRole("button", { name: "立即刷新生成进度" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("我已确认三张视图与质量"));
+    fireEvent.click(screen.getByRole("button", { name: "确认裁切框并生成三张视图" }));
+    await screen.findByRole("button", { name: "重新调整裁切框" });
     fireEvent.click(
-      screen.getByRole("button", { name: "确认三视图并进入 3D 模型处理" }),
+      screen.getByRole("button", { name: "确认裁切并进入 3D 模型处理" }),
     );
 
     await waitFor(() =>

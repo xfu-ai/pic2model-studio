@@ -244,6 +244,7 @@ class MultiviewService:
                 root / "project.sqlite3", set_id=set_id, view_name=view, asset_id=str(crop["id"])
             )
             crops[view] = str(crop["id"])
+        self._repository.confirm_current_views(root / "project.sqlite3", set_id=set_id)
         return crops
 
     def validate(self, root: Path, *, set_id: str, checks: dict[str, str]) -> MultiviewValidation:

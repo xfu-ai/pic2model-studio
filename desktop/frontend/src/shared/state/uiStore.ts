@@ -3,9 +3,10 @@ import type { ApiClient, WorkspaceMode, WorkspaceState, WorkspaceStatePatch } fr
 export const DEFAULT_WORKSPACE: WorkspaceState = {
   workspace_mode: "empty", agent_panel_width: 400, agent_panel_collapsed: false,
   parameter_drawer: "closed", canvas: { zoom: 1, pan_x: 0, pan_y: 0 }, selection_id: null, focus_target: null,
-  reference_context: { content_asset_id: null, style_asset_id: null, content_analysis_asset_id: null, style_analysis_asset_id: null, content_prompt_asset_id: null, style_prompt_asset_id: null, merged_prompt_asset_id: null },
+  reference_context: { content_asset_id: null, style_asset_id: null, content_analysis_asset_id: null, style_analysis_asset_id: null, content_prompt_asset_id: null, style_prompt_asset_id: null, merged_prompt_asset_id: null, suitability_asset_id: null, suitability_analysis_asset_id: null },
   dismissed_job_ids: [],
   image_generation_job_id: null,
+  candidate_result: null,
   workflow_contexts: {
     prompt_image: { zh_prompt: "", en_prompt: "", display_language: "zh", source_prompt_asset_id: null, candidate_count: 2, aspect_ratio: "1:1", selected_candidate_id: null, job_id: null, rewrite_job_id: null },
     target_extract: {
@@ -113,11 +114,19 @@ export function parseWorkspaceState(raw: string | undefined): WorkspaceState {
       content_analysis_asset_id: nullableId(reference.content_analysis_asset_id), style_analysis_asset_id: nullableId(reference.style_analysis_asset_id),
       content_prompt_asset_id: nullableId(reference.content_prompt_asset_id), style_prompt_asset_id: nullableId(reference.style_prompt_asset_id),
       merged_prompt_asset_id: nullableId(reference.merged_prompt_asset_id),
+      suitability_asset_id: nullableId(reference.suitability_asset_id),
+      suitability_analysis_asset_id: nullableId(reference.suitability_analysis_asset_id),
     };
     const dismissed_job_ids = Array.isArray(parsed.dismissed_job_ids) ? parsed.dismissed_job_ids.filter((value): value is string => typeof value === "string").slice(-200) : [];
     const image_generation_job_id = typeof parsed.image_generation_job_id === "string" ? parsed.image_generation_job_id : null;
+    const candidate = object(parsed.candidate_result);
+    const candidateJobId = nullableId(candidate.job_id);
+    const candidateAssetIds = idList(candidate.asset_ids);
+    const candidate_result = candidateJobId && candidateAssetIds.length
+      ? { job_id: candidateJobId, asset_ids: candidateAssetIds }
+      : null;
     const workflow_contexts = parseWorkflowContexts(parsed.workflow_contexts);
-    return { ...DEFAULT_WORKSPACE, ...parsed, agent_panel_width: width, reference_context, dismissed_job_ids, image_generation_job_id, workflow_contexts };
+    return { ...DEFAULT_WORKSPACE, ...parsed, agent_panel_width: width, reference_context, dismissed_job_ids, image_generation_job_id, candidate_result, workflow_contexts };
   } catch { return { ...DEFAULT_WORKSPACE, workspace_mode: "error_diagnostics" }; }
 }
 

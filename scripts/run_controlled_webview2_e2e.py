@@ -1056,6 +1056,695 @@ def run_agent_ui_action_navigation(connection: CdpConnection, timeout: float) ->
         )
 
 
+def run_agent_image_result_navigation(
+    connection: CdpConnection, timeout: float
+) -> dict[str, object]:
+    """Prove a queued Agent image job reopens Creative Image Generation with its result."""
+
+    wait_for(
+        connection,
+        "!!document.querySelector('.agent-live-panel')",
+        "the Agent panel",
+        timeout,
+    )
+    connection.evaluate(
+        r"""(async () => {
+          if (globalThis.__aipicOriginalFetch) throw new Error('controlled fetch is already installed');
+          const original = globalThis.fetch.bind(globalThis);
+          globalThis.__aipicOriginalFetch = original;
+          globalThis.__aipicAgentImageResult = {
+            projectId: null,
+            assetId: null,
+            apiOrigin: null,
+            requestHeaders: null,
+            eventsDelivered: false,
+            continuationPosts: 0,
+            jobReads: 0,
+          };
+          globalThis.fetch = async (...args) => {
+            const input = args[0];
+            const init = args[1] || {};
+            const request = input instanceof Request ? input : null;
+            const url = String(request ? request.url : input);
+            const method = String(init.method || request?.method || 'GET').toUpperCase();
+            const controlled = globalThis.__aipicAgentImageResult;
+
+            if (!controlled.eventsDelivered && /\/v1\/agent\/conversations\/[^/]+\/events\?/.test(url)) {
+              const eventUrl = new URL(url, location.href);
+              const projectId = eventUrl.searchParams.get('project_id');
+              if (!projectId) throw new Error('controlled Agent event has no project identity');
+              const requestHeaders = new Headers(request?.headers || init.headers || {});
+              const assetsResponse = await original(
+                `${eventUrl.origin}/v1/projects/${encodeURIComponent(projectId)}/assets?include_trashed=false`,
+                {headers: requestHeaders}
+              );
+              if (!assetsResponse.ok) throw new Error('controlled assets are unavailable');
+              const assets = await assetsResponse.json();
+              const imageAsset = assets.find((asset) =>
+                asset.asset_type === 'source_image'
+                && String(asset.mime_type || '').startsWith('image/')
+                && !asset.trashed_at
+              );
+              if (!imageAsset) throw new Error('controlled image asset is unavailable');
+              controlled.projectId = projectId;
+              controlled.assetId = imageAsset.id;
+              controlled.apiOrigin = eventUrl.origin;
+              controlled.requestHeaders = requestHeaders;
+              controlled.eventsDelivered = true;
+              return new Response(JSON.stringify({
+                items: [
+                  {
+                    sequence_no: 910001,
+                    event_type: 'tool.call',
+                    payload: {
+                      conversation_id: 'controlled-conversation',
+                      tool_call: {
+                        id: 'controlled-image-call',
+                        name: 'generate_images',
+                        arguments: {candidate_count: 1, aspect_ratio: '1:1'},
+                      },
+                    },
+                    created_at: new Date().toISOString(),
+                  },
+                  {
+                    sequence_no: 910002,
+                    event_type: 'tool.completed',
+                    payload: {
+                      conversation_id: 'controlled-conversation',
+                      tool_call_id: 'controlled-image-call',
+                      tool_name: 'generate_images',
+                      is_error: false,
+                      result: {
+                        content: [{type: 'text', text: 'Controlled image generation queued.'}],
+                        details: {
+                          status: 'queued',
+                          job: {
+                            job_id: 'controlled-image-job',
+                            status: 'queued',
+                            job_type: 'image.generate',
+                            stage: 'queued',
+                            elapsed_seconds: 0,
+                            estimated_seconds: 1,
+                            provider: 'controlled/fixture',
+                            can_cancel: true,
+                            can_stop_waiting: false,
+                          },
+                        },
+                        is_error: false,
+                      },
+                    },
+                    created_at: new Date().toISOString(),
+                  },
+                ],
+                next_cursor: 910002,
+              }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+
+            if (/\/v1\/jobs\/controlled-image-job\?/.test(url)) {
+              controlled.jobReads += 1;
+              return new Response(JSON.stringify({
+                schema_version: 1,
+                id: 'controlled-image-job',
+                job_type: 'image.generate',
+                status: 'succeeded',
+                stage: 'completed',
+                progress: 1,
+                elapsed_seconds: 1,
+                estimated_seconds: 0,
+                provider: 'controlled/fixture',
+                cancel_capability: 'not_cancellable',
+                can_cancel: false,
+                can_stop_waiting: false,
+                output_asset_ids: [controlled.assetId],
+                input_asset_ids: [],
+                error: null,
+              }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+
+            if (method === 'POST' && /\/v1\/agent\/conversations\/[^/]+\/messages$/.test(url)) {
+              const body = JSON.parse(String(init.body || '{}'));
+              if (String(body.request_id || '').startsWith('agent-job-terminal-controlled-image-job')) {
+                controlled.continuationPosts += 1;
+                return new Response(JSON.stringify({
+                  id: 'controlled-conversation',
+                  project_id: controlled.projectId,
+                  state: 'running',
+                  message_count: 0,
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+              }
+            }
+            return original(...args);
+          };
+          return {installed: true};
+        })()"""
+    )
+    try:
+        wait_for(
+            connection,
+            "!!document.querySelector('.prompt-image-workspace')",
+            "the Creative Image Generation workspace",
+            timeout,
+        )
+        wait_for(
+            connection,
+            "!!document.querySelector('.prompt-image-results')",
+            "the Agent-generated image result section",
+            timeout,
+        )
+        wait_for(
+            connection,
+            (
+                "(() => { const images = [...document.querySelectorAll("
+                "'.prompt-image-results img[src^=\"blob:\"]')]; return images.length >= 2 && "
+                "images.every((item) => item.complete && item.naturalWidth > 0); })()"
+            ),
+            "decoded Blob-backed Agent image previews",
+            timeout,
+        )
+        wait_for(
+            connection,
+            "globalThis.__aipicAgentImageResult?.continuationPosts === 1",
+            "the intercepted Agent terminal continuation",
+            timeout,
+        )
+        wait_for(
+            connection,
+            """(async () => {
+              const controlled = globalThis.__aipicAgentImageResult;
+              const response = await globalThis.__aipicOriginalFetch(
+                `${controlled.apiOrigin}/v1/projects/${encodeURIComponent(controlled.projectId)}`,
+                {headers: controlled.requestHeaders}
+              );
+              if (!response.ok) return false;
+              const project = await response.json();
+              const state = JSON.parse(project.workspace_state_json || '{}');
+              return state.image_generation_job_id === 'controlled-image-job'
+                && state.workflow_contexts?.prompt_image?.job_id === 'controlled-image-job';
+            })()""",
+            "the persisted Agent image job identity",
+            timeout,
+        )
+        result = connection.evaluate(
+            """(() => {
+              const controlled = globalThis.__aipicAgentImageResult;
+              const images = [...document.querySelectorAll('.prompt-image-results img')];
+              return {
+                workspaceVisible: !!document.querySelector('.prompt-image-workspace'),
+                resultVisible: !!document.querySelector('.prompt-image-results'),
+                resultAssetId: controlled.assetId,
+                jobReads: controlled.jobReads,
+                continuationPosts: controlled.continuationPosts,
+                previewCount: images.length,
+                decodedBlobPreviews: images.filter((item) =>
+                  item.src.startsWith('blob:') && item.complete && item.naturalWidth > 0
+                ).length,
+              };
+            })()"""
+        )
+    finally:
+        connection.evaluate(
+            """(() => {
+              if (globalThis.__aipicOriginalFetch) {
+                globalThis.fetch = globalThis.__aipicOriginalFetch;
+                delete globalThis.__aipicOriginalFetch;
+              }
+              delete globalThis.__aipicAgentImageResult;
+              return true;
+            })()"""
+        )
+
+    return {
+        "scenario": "agent_image_result_navigation",
+        "status": "passed",
+        "assertions": {
+            "workspace_mode": "prompt_image",
+            "workspace_visible": result["workspaceVisible"],
+            "result_visible": result["resultVisible"],
+            "result_asset_id": result["resultAssetId"],
+            "job_id": "controlled-image-job",
+            "job_reads": result["jobReads"],
+            "terminal_continuations": result["continuationPosts"],
+            "preview_count": result["previewCount"],
+            "decoded_blob_previews": result["decodedBlobPreviews"],
+            "workspace_job_persisted": True,
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
+        },
+    }
+
+
+def run_agent_target_extraction_result_sync(
+    connection: CdpConnection, timeout: float
+) -> dict[str, object]:
+    """Prove an Agent target-extraction completion restores both managed images."""
+
+    wait_for(connection, "!!document.querySelector('.agent-live-panel')", "the Agent panel", timeout)
+    connection.evaluate(
+        r"""(async () => {
+          if (globalThis.__aipicOriginalFetch) throw new Error('controlled fetch is already installed');
+          const original = globalThis.fetch.bind(globalThis);
+          globalThis.__aipicOriginalFetch = original;
+          globalThis.__aipicAgentTargetExtraction = {
+            projectId: null, sourceAsset: null, outputAsset: null, apiOrigin: null,
+            requestHeaders: null, eventsDelivered: false, continuationPosts: 0,
+          };
+          globalThis.fetch = async (...args) => {
+            const input = args[0];
+            const init = args[1] || {};
+            const request = input instanceof Request ? input : null;
+            const url = String(request ? request.url : input);
+            const method = String(init.method || request?.method || 'GET').toUpperCase();
+            const controlled = globalThis.__aipicAgentTargetExtraction;
+
+            if (!controlled.eventsDelivered && /\/v1\/agent\/conversations\/[^/]+\/events\?/.test(url)) {
+              const eventUrl = new URL(url, location.href);
+              const projectId = eventUrl.searchParams.get('project_id');
+              if (!projectId) throw new Error('controlled Agent event has no project identity');
+              const requestHeaders = new Headers(request?.headers || init.headers || {});
+              const assetsResponse = await original(
+                `${eventUrl.origin}/v1/projects/${encodeURIComponent(projectId)}/assets?include_trashed=false`,
+                {headers: requestHeaders},
+              );
+              if (!assetsResponse.ok) throw new Error('controlled assets are unavailable');
+              const assets = await assetsResponse.json();
+              const sourceAsset = assets.find((asset) => asset.asset_type === 'source_image'
+                && String(asset.mime_type || '').startsWith('image/') && !asset.trashed_at);
+              if (!sourceAsset) throw new Error('controlled source image is unavailable');
+              controlled.projectId = projectId;
+              controlled.sourceAsset = sourceAsset;
+              controlled.outputAsset = {
+                ...sourceAsset,
+                id: 'controlled-target-output',
+                name: 'controlled-target-output.png',
+                asset_type: 'generated_image',
+                parent_asset_id: sourceAsset.id,
+                is_current: false,
+              };
+              controlled.apiOrigin = eventUrl.origin;
+              controlled.requestHeaders = requestHeaders;
+              controlled.eventsDelivered = true;
+              return new Response(JSON.stringify({
+                items: [
+                  {
+                    sequence_no: 920001,
+                    event_type: 'tool.call',
+                    payload: {
+                      conversation_id: 'controlled-target-conversation',
+                      tool_call: {
+                        id: 'controlled-target-call', name: 'split_image',
+                        arguments: {
+                          source_asset_ref: sourceAsset.id,
+                          selection_ref: 'controlled-selection',
+                          prompt_asset_ref: 'controlled-target-prompt',
+                          split_mode: 'boxsplit',
+                        },
+                      },
+                    },
+                    created_at: new Date().toISOString(),
+                  },
+                  {
+                    sequence_no: 920002,
+                    event_type: 'tool.completed',
+                    payload: {
+                      conversation_id: 'controlled-target-conversation',
+                      tool_call_id: 'controlled-target-call', tool_name: 'split_image', is_error: false,
+                      result: {
+                        content: [{type: 'text', text: 'Controlled target extraction queued.'}],
+                        details: {status: 'queued', job: {
+                          job_id: 'controlled-target-job', status: 'queued', job_type: 'element.split',
+                          stage: 'queued', elapsed_seconds: 0, estimated_seconds: 1,
+                          provider: 'controlled/fixture', can_cancel: true, can_stop_waiting: false,
+                        }},
+                        is_error: false,
+                      },
+                    },
+                    created_at: new Date().toISOString(),
+                  },
+                ],
+                next_cursor: 920002,
+              }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+
+            if (/\/v1\/jobs\/controlled-target-job\?/.test(url)) {
+              return new Response(JSON.stringify({
+                schema_version: 1, id: 'controlled-target-job', job_type: 'element.split',
+                status: 'succeeded', stage: 'completed', progress: 1, elapsed_seconds: 1,
+                estimated_seconds: 0, provider: 'controlled/fixture', cancel_capability: 'not_cancellable',
+                can_cancel: false, can_stop_waiting: false,
+                output_asset_ids: [controlled.outputAsset.id], input_asset_ids: [controlled.sourceAsset.id], error: null,
+              }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+
+            if (controlled.outputAsset && method === 'GET'
+              && new URL(url, location.href).pathname === `/v1/projects/${encodeURIComponent(controlled.projectId)}/assets`) {
+              const response = await original(...args);
+              if (!response.ok) return response;
+              const assets = await response.json();
+              return new Response(JSON.stringify([...assets.filter((asset) => asset.id !== controlled.outputAsset.id), controlled.outputAsset]), {
+                status: 200, headers: {'Content-Type': 'application/json'},
+              });
+            }
+            if (controlled.outputAsset && /\/assets\/controlled-target-output\/content$/.test(url)) {
+              const source = await original(
+                `${controlled.apiOrigin}/v1/projects/${encodeURIComponent(controlled.projectId)}/assets/${encodeURIComponent(controlled.sourceAsset.id)}/content`,
+                {headers: controlled.requestHeaders},
+              );
+              return new Response(await source.arrayBuffer(), {
+                status: source.status, headers: {'Content-Type': source.headers.get('Content-Type') || 'image/png'},
+              });
+            }
+            if (method === 'POST' && /\/v1\/agent\/conversations\/[^/]+\/messages$/.test(url)) {
+              const body = JSON.parse(String(init.body || '{}'));
+              if (String(body.request_id || '').startsWith('agent-job-terminal-controlled-target-job')) {
+                controlled.continuationPosts += 1;
+                return new Response(JSON.stringify({
+                  id: 'controlled-target-conversation', project_id: controlled.projectId, state: 'running', message_count: 0,
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+              }
+            }
+            return original(...args);
+          };
+          return true;
+        })()"""
+    )
+    try:
+        wait_for(connection, "!!document.querySelector('.target-extraction-workspace')", "the target extraction workspace", timeout)
+        wait_for(
+            connection,
+            "!!document.querySelector('.target-settings-panel img[src^=\"blob:\"]') && !!document.querySelector('.target-result-card img[data-managed-asset-id=\"controlled-target-output\"]')",
+            "the managed source and generated target images",
+            timeout,
+        )
+        wait_for(
+            connection,
+            "globalThis.__aipicAgentTargetExtraction?.continuationPosts === 1",
+            "the intercepted Agent terminal continuation",
+            timeout,
+        )
+        wait_for(
+            connection,
+            r"""(async () => {
+              const controlled = globalThis.__aipicAgentTargetExtraction;
+              const response = await globalThis.__aipicOriginalFetch(
+                `${controlled.apiOrigin}/v1/projects/${encodeURIComponent(controlled.projectId)}`,
+                {headers: controlled.requestHeaders},
+              );
+              if (!response.ok) return false;
+              const state = JSON.parse((await response.json()).workspace_state_json || '{}');
+              const target = state.workflow_contexts?.target_extract;
+              return state.workspace_mode === 'target_extract'
+                && target?.source_asset_id === controlled.sourceAsset.id
+                && target?.active_result_asset_id === controlled.outputAsset.id
+                && target?.result_asset_ids?.includes(controlled.outputAsset.id);
+            })()""",
+            "the persisted Agent target-extraction source and result identities",
+            timeout,
+        )
+        result = connection.evaluate(
+            """(() => ({
+              sourceAssetId: globalThis.__aipicAgentTargetExtraction.sourceAsset.id,
+              outputAssetId: globalThis.__aipicAgentTargetExtraction.outputAsset.id,
+              sourcePreview: !!document.querySelector('.target-settings-panel img[src^=\"blob:\"]'),
+              outputPreview: !!document.querySelector('.target-result-card img[data-managed-asset-id=\"controlled-target-output\"]'),
+              continuationPosts: globalThis.__aipicAgentTargetExtraction.continuationPosts,
+            }))()"""
+        )
+    finally:
+        connection.evaluate(
+            """(() => {
+              if (globalThis.__aipicOriginalFetch) globalThis.fetch = globalThis.__aipicOriginalFetch;
+              delete globalThis.__aipicOriginalFetch;
+              delete globalThis.__aipicAgentTargetExtraction;
+              return true;
+            })()"""
+        )
+    return {
+        "scenario": "agent_target_extraction_result_sync",
+        "status": "passed",
+        "assertions": {
+            "workspace_mode": "target_extract",
+            "source_asset_id": result["sourceAssetId"],
+            "result_asset_id": result["outputAssetId"],
+            "source_preview": result["sourcePreview"],
+            "result_preview": result["outputPreview"],
+            "terminal_continuations": result["continuationPosts"],
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
+        },
+    }
+
+
+def run_agent_analysis_result_sync(
+    connection: CdpConnection, timeout: float
+) -> dict[str, object]:
+    """Prove an Agent content-analysis job refreshes the visible analysis Prompt."""
+
+    wait_for(
+        connection,
+        "!!document.querySelector('.agent-live-panel')",
+        "the Agent panel",
+        timeout,
+    )
+    connection.evaluate(
+        r"""(async () => {
+          if (globalThis.__aipicOriginalFetch) throw new Error('controlled fetch is already installed');
+          const original = globalThis.fetch.bind(globalThis);
+          globalThis.__aipicOriginalFetch = original;
+          globalThis.__aipicAgentAnalysis = {
+            projectId: null,
+            sourceAssetId: null,
+            analysisAssetId: null,
+            jobId: null,
+            apiOrigin: null,
+            requestHeaders: null,
+            eventsDelivered: false,
+            continuationPosts: 0,
+            jobReads: 0,
+          };
+          globalThis.fetch = async (...args) => {
+            const input = args[0];
+            const init = args[1] || {};
+            const request = input instanceof Request ? input : null;
+            const url = String(request ? request.url : input);
+            const method = String(init.method || request?.method || 'GET').toUpperCase();
+            const controlled = globalThis.__aipicAgentAnalysis;
+
+            if (!controlled.eventsDelivered && /\/v1\/agent\/conversations\/[^/]+\/events\?/.test(url)) {
+              const eventUrl = new URL(url, location.href);
+              const projectId = eventUrl.searchParams.get('project_id');
+              if (!projectId) throw new Error('controlled Agent event has no project identity');
+              const requestHeaders = new Headers(request?.headers || init.headers || {});
+              const assetsResponse = await original(
+                `${eventUrl.origin}/v1/projects/${encodeURIComponent(projectId)}/assets?include_trashed=false`,
+                {headers: requestHeaders}
+              );
+              if (!assetsResponse.ok) throw new Error('controlled assets are unavailable');
+              const assets = await assetsResponse.json();
+              const imageAsset = assets.find((asset) =>
+                asset.asset_type === 'source_image'
+                && String(asset.mime_type || '').startsWith('image/')
+                && !asset.trashed_at
+              );
+              if (!imageAsset) throw new Error('controlled image asset is unavailable');
+              const requestId = `controlled-agent-analysis-${Date.now()}`;
+              controlled.eventsDelivered = true;
+              const commandHeaders = new Headers(requestHeaders);
+              commandHeaders.set('Content-Type', 'application/json');
+              commandHeaders.set('X-Request-Id', requestId);
+              const toolResponse = await original(`${eventUrl.origin}/v1/tools/invoke`, {
+                method: 'POST',
+                headers: commandHeaders,
+                body: JSON.stringify({
+                  project_id: projectId,
+                  run_id: null,
+                  round_index: 0,
+                  tool_name: 'image.analyze_content',
+                  tool_version: '1.0.0',
+                  arguments: {
+                    asset_id: imageAsset.id,
+                    provider_profile: 'gemini/google/default',
+                    model: 'gemini-flash-lite-latest',
+                  },
+                  request_id: requestId,
+                  provider_profile: 'gemini/google/default',
+                }),
+              });
+              if (!toolResponse.ok) throw new Error('controlled content analysis could not be queued');
+              const queued = await toolResponse.json();
+              const jobId = queued.job?.job_id;
+              if (queued.status !== 'queued' || !jobId) {
+                throw new Error(`controlled content analysis returned ${queued.status || 'unknown'}`);
+              }
+              controlled.projectId = projectId;
+              controlled.sourceAssetId = imageAsset.id;
+              controlled.jobId = jobId;
+              controlled.apiOrigin = eventUrl.origin;
+              controlled.requestHeaders = requestHeaders;
+              return new Response(JSON.stringify({
+                items: [
+                  {
+                    sequence_no: 920001,
+                    event_type: 'tool.call',
+                    payload: {
+                      conversation_id: 'controlled-conversation',
+                      tool_call: {
+                        id: 'controlled-analysis-call',
+                        name: 'analyze_image',
+                        arguments: {source_asset_ref: imageAsset.id, analysis_type: 'content'},
+                      },
+                    },
+                    created_at: new Date().toISOString(),
+                  },
+                  {
+                    sequence_no: 920002,
+                    event_type: 'tool.completed',
+                    payload: {
+                      conversation_id: 'controlled-conversation',
+                      tool_call_id: 'controlled-analysis-call',
+                      tool_name: 'analyze_image',
+                      is_error: false,
+                      result: {
+                        content: [{type: 'text', text: 'Controlled content analysis queued.'}],
+                        details: {
+                          status: 'queued',
+                          job: queued.job,
+                        },
+                        is_error: false,
+                      },
+                    },
+                    created_at: new Date().toISOString(),
+                  },
+                ],
+                next_cursor: 920002,
+              }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+
+            if (controlled.jobId && url.includes(`/v1/jobs/${controlled.jobId}?`)) {
+              controlled.jobReads += 1;
+              const response = await original(...args);
+              const body = await response.clone().json();
+              if (body.status === 'succeeded') {
+                controlled.analysisAssetId = body.output_asset_ids?.[0] || null;
+              }
+              return response;
+            }
+
+            if (method === 'POST' && /\/v1\/agent\/conversations\/[^/]+\/messages$/.test(url)) {
+              const body = JSON.parse(String(init.body || '{}'));
+              if (String(body.request_id || '').startsWith('agent-job-terminal-')) {
+                controlled.continuationPosts += 1;
+                return new Response(JSON.stringify({
+                  id: 'controlled-conversation',
+                  project_id: controlled.projectId,
+                  state: 'running',
+                  message_count: 0,
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+              }
+            }
+            return original(...args);
+          };
+          return {installed: true};
+        })()"""
+    )
+    try:
+        wait_for(
+            connection,
+            "!!document.querySelector('.compare-workspace')",
+            "the Content and Style Analysis workspace",
+            timeout,
+        )
+        wait_for(
+            connection,
+            "globalThis.__aipicAgentAnalysis?.continuationPosts === 1",
+            "the intercepted Agent terminal continuation",
+            timeout,
+        )
+        wait_for(
+            connection,
+            """(() => {
+              const editor = document.querySelector(
+                '.prompt-role-editor[aria-label="内容分析（主体与结构）"]'
+              );
+              const values = [...(editor?.querySelectorAll('textarea') || [])]
+                .map((item) => item.value);
+              return values.includes('一个用于受控端到端验证的素材')
+                && values.includes('an asset for controlled end-to-end validation');
+            })()""",
+            "the refreshed bilingual content Prompt",
+            timeout,
+        )
+        wait_for(
+            connection,
+            """(async () => {
+              const controlled = globalThis.__aipicAgentAnalysis;
+              if (!controlled.analysisAssetId) return false;
+              const response = await globalThis.__aipicOriginalFetch(
+                `${controlled.apiOrigin}/v1/projects/${encodeURIComponent(controlled.projectId)}`,
+                {headers: controlled.requestHeaders}
+              );
+              if (!response.ok) return false;
+              const project = await response.json();
+              const state = JSON.parse(project.workspace_state_json || '{}');
+              return state.reference_context?.content_asset_id === controlled.sourceAssetId
+                && state.reference_context?.content_analysis_asset_id === controlled.analysisAssetId
+                && !!state.reference_context?.content_prompt_asset_id
+                && state.reference_context?.merged_prompt_asset_id === null;
+            })()""",
+            "the persisted Agent analysis and extracted Prompt identities",
+            timeout,
+        )
+        result = connection.evaluate(
+            """(() => {
+              const controlled = globalThis.__aipicAgentAnalysis;
+              const editor = document.querySelector(
+                '.prompt-role-editor[aria-label="内容分析（主体与结构）"]'
+              );
+              const values = [...(editor?.querySelectorAll('textarea') || [])]
+                .map((item) => item.value);
+              return {
+                workspaceVisible: !!document.querySelector('.compare-workspace'),
+                sourceAssetId: controlled.sourceAssetId,
+                analysisAssetId: controlled.analysisAssetId,
+                jobId: controlled.jobId,
+                jobReads: controlled.jobReads,
+                continuationPosts: controlled.continuationPosts,
+                chinesePromptRefreshed: values.includes('一个用于受控端到端验证的素材'),
+                englishPromptRefreshed: values.includes('an asset for controlled end-to-end validation'),
+              };
+            })()"""
+        )
+    finally:
+        connection.evaluate(
+            """(() => {
+              if (globalThis.__aipicOriginalFetch) {
+                globalThis.fetch = globalThis.__aipicOriginalFetch;
+                delete globalThis.__aipicOriginalFetch;
+              }
+              delete globalThis.__aipicAgentAnalysis;
+              return true;
+            })()"""
+        )
+
+    return {
+        "scenario": "agent_analysis_result_sync",
+        "status": "passed",
+        "assertions": {
+            "workspace_mode": "compare",
+            "workspace_visible": result["workspaceVisible"],
+            "source_asset_id": result["sourceAssetId"],
+            "analysis_asset_id": result["analysisAssetId"],
+            "job_id": result["jobId"],
+            "job_reads": result["jobReads"],
+            "terminal_continuations": result["continuationPosts"],
+            "chinese_prompt_refreshed": result["chinesePromptRefreshed"],
+            "english_prompt_refreshed": result["englishPromptRefreshed"],
+            "workspace_context_persisted": True,
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
+        },
+    }
+
+
 def run_prompt_rewrite(connection: CdpConnection, timeout: float) -> dict[str, object]:
     """Prove controlled bilingual Prompt rewrite and visible language refill."""
 
@@ -1168,7 +1857,7 @@ def run_prompt_rewrite(connection: CdpConnection, timeout: float) -> dict[str, o
 def run_multiview_current_source(
     connection: CdpConnection, timeout: float
 ) -> dict[str, object]:
-    """Prove the project-current image identity and task-refresh visibility."""
+    """Prove the project-current source and the crop-confirmation handoff."""
 
     connection.evaluate(
         """(() => {
@@ -1225,6 +1914,17 @@ def run_multiview_current_source(
         "the authoritative project-current multiview source",
         timeout,
     )
+    wait_for(
+        connection,
+        (
+            "(() => { const previews = [...document.querySelectorAll("
+            "'.multiview-crop-card img')]; return previews.length === 3 && "
+            "previews.every((item) => item.src.startsWith('blob:') && "
+            "item.complete && item.naturalWidth > 0); })()"
+        ),
+        "three CSP-compatible multiview crop previews",
+        timeout,
+    )
     manual_refresh_visible = connection.evaluate(
         """[...document.querySelectorAll('.multiview-source-panel button')]
           .some((item) => item.textContent?.trim() === '立即刷新生成进度')"""
@@ -1233,6 +1933,68 @@ def run_multiview_current_source(
         raise AssertionError(
             "generation progress refresh was shown without a multiview generation job"
         )
+    crop_button_style = connection.evaluate(
+        """(() => {
+          const button = document.querySelector('.multiview-confirm-crops');
+          if (!button || button.disabled) throw new Error('crop confirmation is unavailable');
+          const style = getComputedStyle(button);
+          return {backgroundColor: style.backgroundColor, color: style.color};
+        })()"""
+    )
+    connection.evaluate(
+        """(() => {
+          const button = document.querySelector('.multiview-confirm-crops');
+          if (!button || button.disabled) throw new Error('crop confirmation is unavailable');
+          button.click();
+          return true;
+        })()"""
+    )
+    wait_for(
+        connection,
+        (
+            "(() => { const previews = [...document.querySelectorAll("
+            "'.multiview-crop-card img')]; return previews.length === 3 && "
+            "previews.every((item) => item.src.startsWith('blob:') && "
+            "item.complete && item.naturalWidth > 0) && "
+            "[...document.querySelectorAll('.multiview-output-panel button')]"
+            ".some((item) => item.textContent?.trim() === '重新调整裁切框'); })()"
+        ),
+        "three persisted managed crop assets",
+        timeout,
+    )
+    wait_for(
+        connection,
+        "!document.querySelector('.multiview-submit')?.disabled",
+        "the unlocked 3D handoff after crop confirmation",
+        timeout,
+    )
+    connection.evaluate(
+        "globalThis.__aipicMultiviewPersistenceDeadline = Date.now() + 750"
+    )
+    wait_for(
+        connection,
+        "Date.now() >= globalThis.__aipicMultiviewPersistenceDeadline",
+        "the debounced multiview workspace persistence",
+        timeout,
+    )
+    confirmation_result = connection.evaluate(
+        """(() => {
+          const submit = document.querySelector('.multiview-submit');
+          if (!submit) throw new Error('3D handoff action is missing');
+          const style = getComputedStyle(submit);
+          const bodyText = document.body.innerText;
+          return {
+            submitBackgroundColor: style.backgroundColor,
+            submitColor: style.color,
+            submitEnabled: !submit.disabled,
+            qualityCheckboxAbsent: !bodyText.includes('我已确认三张视图与质量'),
+            managedCropCount: [...document.querySelectorAll('.multiview-crop-card img')]
+              .filter((item) => item.src.startsWith('blob:')).length,
+          };
+        })()"""
+    )
+    if not confirmation_result["qualityCheckboxAbsent"]:
+        raise AssertionError("the redundant multiview quality checkbox is still visible")
     selected_label = connection.evaluate(
         """document.querySelector('[aria-label="三视图来源"] option:checked')
           ?.textContent?.trim() || ''"""
@@ -1245,6 +2007,15 @@ def run_multiview_current_source(
             "project_current_marker": True,
             "selected_source": selected_label,
             "source_preview": True,
+            "crop_previews": 3,
+            "crop_preview_scheme": "blob",
+            "crop_confirmation_background": crop_button_style["backgroundColor"],
+            "crop_confirmation_text_color": crop_button_style["color"],
+            "managed_crop_assets": confirmation_result["managedCropCount"],
+            "quality_checkbox_absent": confirmation_result["qualityCheckboxAbsent"],
+            "submit_enabled_after_crop_confirmation": confirmation_result["submitEnabled"],
+            "submit_background": confirmation_result["submitBackgroundColor"],
+            "submit_text_color": confirmation_result["submitColor"],
             "refresh_hidden_without_job": True,
             "runtime_errors": 0,
             "unhandled_rejections": 0,
@@ -1583,6 +2354,150 @@ def run_blender_settings(connection: CdpConnection, timeout: float) -> dict[str,
     }
 
 
+def run_agent_model_settings(connection: CdpConnection, timeout: float) -> dict[str, object]:
+    connection.evaluate(
+        "if (!document.querySelector('#agent-model')) document.querySelector('button[aria-label=\"设置\"]')?.click()"
+    )
+    wait_for(connection, "!!document.querySelector('#agent-model')", "the Agent model setting", timeout)
+    default_model = connection.evaluate("document.querySelector('#agent-model')?.value")
+    if default_model != "qwen3-vl:8b":
+        raise AssertionError(f"unexpected default Agent model: {default_model!r}")
+    selected_model = "qwen3-vl:4b"
+    connection.evaluate(
+        """(() => {
+          const select = document.querySelector('#agent-model');
+          if (!(select instanceof HTMLSelectElement)) throw new Error('Agent model select is missing');
+          const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+          setter?.call(select, """
+        + json.dumps(selected_model)
+        + """);
+          select.dispatchEvent(new Event('input', { bubbles: true }));
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+          document.querySelector('.dialog-actions button.primary')?.click();
+        })()"""
+    )
+    wait_for(
+        connection,
+        "!!document.querySelector('.settings-message')?.textContent?.trim()",
+        "the Agent model setting save result",
+        timeout,
+    )
+    connection.evaluate("document.querySelector('.dialog-actions button:not(.primary)')?.click()")
+    wait_for(connection, "!document.querySelector('#agent-model')", "the settings dialog to close", timeout)
+    connection.evaluate("document.querySelector('button[aria-label=\"设置\"]')?.click()")
+    wait_for(
+        connection,
+        "document.querySelector('#agent-model')?.value === " + json.dumps(selected_model),
+        "the persisted Agent model setting",
+        timeout,
+    )
+    connection.evaluate("document.querySelector('#agent-model')?.closest('.settings-section')?.scrollIntoView({ block: 'center' })")
+    return {
+        "scenario": "agent_model_settings",
+        "status": "passed",
+        "assertions": {
+            "default_model": default_model,
+            "selected_model": selected_model,
+            "setting_saved": True,
+            "setting_reloaded": True,
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
+        },
+    }
+
+
+def run_local_model_settings(connection: CdpConnection, timeout: float) -> dict[str, object]:
+    connection.evaluate(
+        "if (!document.querySelector('#local-provider-title')) document.querySelector('button[aria-label=\"设置\"]')?.click()"
+    )
+    wait_for(connection, "!!document.querySelector('#local-provider-title')", "the local Provider settings", timeout)
+    wait_for(
+        connection,
+        "document.querySelectorAll('.local-provider-card').length === 3",
+        "the three local Provider cards",
+        timeout,
+    )
+    cards = connection.evaluate(
+        "[...document.querySelectorAll('.local-provider-card')].map((card) => card.textContent?.trim() || '')"
+    )
+    for expected in ("Qwen3-VL", "Z-Image-Turbo", "TripoSR"):
+        if not any(expected in card for card in cards):
+            raise AssertionError(f"missing local Provider card: {expected}")
+    safety_text = connection.evaluate(
+        "document.querySelector('#local-provider-title')?.closest('.settings-section')?.textContent || ''"
+    )
+    if "不下载权重" not in safety_text or "不会启动" not in safety_text:
+        raise AssertionError("local Provider probe safety explanation is missing")
+    default_agent = connection.evaluate("document.querySelector('#agent-model')?.value")
+    if default_agent != "qwen3-vl:8b":
+        raise AssertionError(f"unexpected default local Agent model: {default_agent!r}")
+    connection.evaluate(
+        "[...document.querySelectorAll('button')].find((item) => item.textContent?.includes('检测本地模型'))?.click()"
+    )
+    wait_for(
+        connection,
+        "document.querySelector('.settings-message')?.textContent?.includes('不会下载模型')",
+        "the safe local Provider refresh result",
+        timeout,
+    )
+    connection.evaluate(
+        """(() => {
+          const setSelect = (labelText, value) => {
+            const select = [...document.querySelectorAll('.settings-section label select')]
+              .find((item) => item.closest('label')?.textContent?.includes(labelText));
+            if (!(select instanceof HTMLSelectElement)) throw new Error(`${labelText} select is missing`);
+            const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+            setter?.call(select, value);
+            select.dispatchEvent(new Event('input', { bubbles: true }));
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+          };
+          setSelect('文生图执行后端', 'local');
+          setSelect('图生 3D 执行后端', 'remote');
+          document.querySelector('.dialog-actions button.primary')?.click();
+          return true;
+        })()"""
+    )
+    wait_for(
+        connection,
+        "['设置已保存', '状态已更新'].some((text) => document.querySelector('.settings-message')?.textContent?.includes(text))",
+        "the local generation policy save result",
+        timeout,
+    )
+    connection.evaluate("document.querySelector('.dialog-actions button:not(.primary)')?.click()")
+    wait_for(connection, "!document.querySelector('#local-provider-title')", "the settings dialog to close", timeout)
+    connection.evaluate("document.querySelector('button[aria-label=\"设置\"]')?.click()")
+    wait_for(
+        connection,
+        "[...document.querySelectorAll('.settings-section label select')].some((item) => item.closest('label')?.textContent?.includes('文生图执行后端') && item.value === 'local')",
+        "the persisted local image backend",
+        timeout,
+    )
+    wait_for(
+        connection,
+        "[...document.querySelectorAll('.settings-section label select')].some((item) => item.closest('label')?.textContent?.includes('图生 3D 执行后端') && item.value === 'remote')",
+        "the persisted remote 3D backend",
+        timeout,
+    )
+    connection.evaluate(
+        "document.querySelector('#local-provider-title')?.closest('.settings-section')?.scrollIntoView({ block: 'center' })"
+    )
+    return {
+        "scenario": "local_model_settings",
+        "status": "passed",
+        "assertions": {
+            "local_provider_cards": 3,
+            "models": ["Qwen3-VL", "Z-Image-Turbo", "TripoSR"],
+            "probe_does_not_download_or_generate": True,
+            "default_agent_model": default_agent,
+            "image_backend": "local",
+            "model3d_backend": "remote",
+            "settings_reloaded": True,
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
+        },
+    }
+
+
 def run_product_workflow(connection: CdpConnection, timeout: float) -> dict[str, object]:
     wait_for(
         connection,
@@ -1774,6 +2689,9 @@ def main() -> int:
     parser.add_argument("--mock-tripo-approval", action="store_true")
     parser.add_argument("--open-model-result", action="store_true")
     parser.add_argument("--agent-ui-action-navigation", action="store_true")
+    parser.add_argument("--agent-image-result-navigation", action="store_true")
+    parser.add_argument("--agent-target-extraction-result-sync", action="store_true")
+    parser.add_argument("--agent-analysis-result-sync", action="store_true")
     parser.add_argument("--agent-image-attachment", action="store_true")
     parser.add_argument("--agent-image-path", type=Path, nargs="+")
     parser.add_argument("--prompt-rewrite", action="store_true")
@@ -1784,6 +2702,8 @@ def main() -> int:
     parser.add_argument("--task-center", action="store_true")
     parser.add_argument("--service-credentials", action="store_true")
     parser.add_argument("--blender-settings", action="store_true")
+    parser.add_argument("--agent-model-settings", action="store_true")
+    parser.add_argument("--local-model-settings", action="store_true")
     parser.add_argument("--product-workflow", action="store_true")
     parser.add_argument("--model-fallback-visual", action="store_true")
     parser.add_argument("--recover-offline", action="store_true")
@@ -1819,6 +2739,18 @@ def main() -> int:
         if args.agent_ui_action_navigation:
             run_agent_ui_action_navigation(connection, args.timeout)
         interaction_summary = None
+        if args.agent_image_result_navigation:
+            interaction_summary = run_agent_image_result_navigation(
+                connection, args.timeout
+            )
+        if args.agent_target_extraction_result_sync:
+            interaction_summary = run_agent_target_extraction_result_sync(
+                connection, args.timeout
+            )
+        if args.agent_analysis_result_sync:
+            interaction_summary = run_agent_analysis_result_sync(
+                connection, args.timeout
+            )
         if args.agent_image_attachment:
             interaction_summary = run_agent_image_attachment(
                 connection, args.timeout, args.agent_image_path or []
@@ -1841,6 +2773,10 @@ def main() -> int:
             interaction_summary = run_service_credentials(connection, args.timeout)
         if args.blender_settings:
             interaction_summary = run_blender_settings(connection, args.timeout)
+        if args.agent_model_settings:
+            interaction_summary = run_agent_model_settings(connection, args.timeout)
+        if args.local_model_settings:
+            interaction_summary = run_local_model_settings(connection, args.timeout)
         if args.product_workflow:
             interaction_summary = run_product_workflow(connection, args.timeout)
         if args.model_fallback_visual:
@@ -1865,6 +2801,16 @@ def main() -> int:
             encoding="utf-8",
         )
     if args.blender_settings and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if args.agent_model_settings and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if args.local_model_settings and interaction_summary is not None:
         (args.output / "interaction-summary.json").write_text(
             json.dumps(interaction_summary, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -1896,6 +2842,21 @@ def main() -> int:
                 ensure_ascii=False,
                 indent=2,
             ),
+            encoding="utf-8",
+        )
+    if args.agent_image_result_navigation and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if args.agent_target_extraction_result_sync and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if args.agent_analysis_result_sync and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     if args.agent_image_attachment and interaction_summary is not None:

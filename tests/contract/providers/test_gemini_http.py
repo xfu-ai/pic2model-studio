@@ -136,6 +136,41 @@ def test_gemini_vision_analysis_uses_inline_managed_image() -> None:
     assert result.raw_response is not None
 
 
+def test_gemini_image_understanding_uses_plain_text_not_the_analysis_contract() -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        payload = __import__("json").loads(request.content)
+        parts = payload["contents"][0]["parts"]
+        assert parts[1]["inlineData"]["mimeType"] == "image/png"
+        assert "What object is visible?" in parts[0]["text"]
+        system = payload["systemInstruction"]["parts"][0]["text"]
+        assert "text-only workflow Agent" in system
+        assert "prompt-authoring" not in system
+        assert "responseMimeType" not in payload["generationConfig"]
+        return httpx.Response(
+            200,
+            headers={"x-goog-request-id": "understanding-request"},
+            json={"candidates": [{"content": {"parts": [{"text": "A gray cube."}]}}]},
+            request=request,
+        )
+
+    provider = GeminiVisionProvider(
+        GeminiSettings(),
+        lambda: "secret",
+        client=httpx.Client(transport=httpx.MockTransport(transport)),
+    )
+    result = provider.understand_image(
+        asset_id="asset",
+        question="What object is visible?",
+        model="gemini-flash-lite-latest",
+        image_bytes=_png(),
+        mime_type="image/png",
+    )
+
+    assert result.ok
+    assert result.provider_request_id == "understanding-request"
+    assert result.payload == {"text": "A gray cube."}
+
+
 def test_gemini_vision_retries_transient_failures_with_legacy_backoff() -> None:
     attempts = 0
     waits: list[float] = []

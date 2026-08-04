@@ -22,6 +22,31 @@ const contentAnalysis: AssetDto = { id: "content-analysis", asset_type: "analysi
 const currentCandidate: AssetDto = { id: "current-candidate", asset_type: "generated_image", name: "Current-candidate.png", is_current: true, metadata: { width: 1024, height: 1024 }, version_no: 2 };
 
 describe("Reference workspace", () => {
+  it("shows the persisted Agent 3D suitability analysis", async () => {
+    const api = {
+      assets: vi.fn().mockResolvedValue([]),
+      assetText: vi.fn().mockResolvedValue("主体完整，适合进行多视图建模。"),
+    };
+    render(<CompareWorkspace
+      projectId="project-1"
+      api={api as never}
+      onModeChange={vi.fn()}
+      referenceContext={{
+        content_asset_id: null,
+        style_asset_id: null,
+        content_analysis_asset_id: null,
+        style_analysis_asset_id: null,
+        content_prompt_asset_id: null,
+        style_prompt_asset_id: null,
+        merged_prompt_asset_id: null,
+        suitability_asset_id: "source-image",
+        suitability_analysis_asset_id: "suitability-report",
+      }}
+    />);
+    expect(await screen.findByText("主体完整，适合进行多视图建模。")).toBeVisible();
+    expect(api.assetText).toHaveBeenCalledWith("project-1", "suitability-report");
+  });
+
   beforeEach(() => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:reference") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });

@@ -74,6 +74,12 @@ def generate(output: Path) -> dict[str, Any]:
         multiview.confirm_regions(
             project_root, project.id, set_id=multiview_set_id, request_id="evidence-regions"
         )
+        multiview.crop_confirmed_views(
+            project_root,
+            project.id,
+            set_id=multiview_set_id,
+            request_id="evidence-crops",
+        )
         quality_request = dependencies.registry.execute(
             project_root,
             project.id,

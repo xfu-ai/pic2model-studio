@@ -25,7 +25,11 @@ class ProjectService:
 
     @staticmethod
     def _root_state(root: Path) -> str:
-        probe = root / ".pic2model-write-probe"
+        # Opening a project is a read-heavy operation and several renderer
+        # requests can probe the same root concurrently. A shared probe name
+        # makes one healthy request see another request's file and incorrectly
+        # downgrade the project to read-only.
+        probe = root / f".pic2model-write-probe-{new_id()}"
         try:
             with probe.open("xb") as stream:
                 stream.write(b"probe")
@@ -196,8 +200,10 @@ class ProjectService:
         _validate_workspace_state(state)
         return dict(self._repository.update_workspace_state(root / "project.sqlite3", project_id, state, request_id))
 
-    def workspace_state(self, root: Path, project_id: str) -> str:
-        project = self.open(root)
+    def workspace_state(
+        self, root: Path, project_id: str, *, force_read_only: bool = False
+    ) -> str:
+        project = self.open(root, force_read_only=force_read_only)
         if project.id != project_id:
             raise DomainErrorV1(ErrorCode.PROJECT_NOT_FOUND, "Project does not exist.")
         state = self._repository.workspace_state(root / "project.sqlite3", project_id)
@@ -207,7 +213,7 @@ class ProjectService:
 def _validate_workspace_state(state: dict[str, object]) -> None:
     allowed = {
         "workspace_mode", "agent_panel_width", "agent_panel_collapsed", "parameter_drawer",
-        "canvas", "selection_id", "focus_target", "reference_context", "dismissed_job_ids", "image_generation_job_id", "workflow_contexts",
+        "canvas", "selection_id", "focus_target", "reference_context", "dismissed_job_ids", "image_generation_job_id", "candidate_result", "workflow_contexts",
     }
     if set(state) - allowed:
         raise DomainErrorV1(ErrorCode.SCHEMA_VALIDATION_FAILED, "Unsupported workspace state field.")
@@ -228,6 +234,7 @@ def _validate_workspace_state(state: dict[str, object]) -> None:
     reference_fields = {
         "content_asset_id", "style_asset_id", "content_analysis_asset_id", "style_analysis_asset_id",
         "content_prompt_asset_id", "style_prompt_asset_id", "merged_prompt_asset_id",
+        "suitability_asset_id", "suitability_analysis_asset_id",
     }
     if reference_context is not None and (
         not isinstance(reference_context, dict)
@@ -245,6 +252,21 @@ def _validate_workspace_state(state: dict[str, object]) -> None:
     image_job = state.get("image_generation_job_id")
     if image_job is not None and not isinstance(image_job, str):
         raise DomainErrorV1(ErrorCode.SCHEMA_VALIDATION_FAILED, "Image generation job is invalid.")
+    candidate_result = state.get("candidate_result")
+    if candidate_result is not None and (
+        not isinstance(candidate_result, dict)
+        or set(candidate_result) - {"job_id", "asset_ids"}
+        or not isinstance(candidate_result.get("job_id"), str)
+        or not candidate_result.get("job_id")
+        or len(candidate_result.get("job_id")) > 256
+        or not isinstance(candidate_result.get("asset_ids"), list)
+        or not 1 <= len(candidate_result.get("asset_ids")) <= 64
+        or not all(
+            isinstance(item, str) and 0 < len(item) <= 256
+            for item in candidate_result.get("asset_ids")
+        )
+    ):
+        raise DomainErrorV1(ErrorCode.SCHEMA_VALIDATION_FAILED, "Candidate result is invalid.")
     contexts = state.get("workflow_contexts")
     allowed_contexts = {"prompt_image", "target_extract", "element_split", "box_split", "multiview", "model3d"}
     if contexts is None:

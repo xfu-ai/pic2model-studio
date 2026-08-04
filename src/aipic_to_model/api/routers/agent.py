@@ -76,6 +76,7 @@ def build_agent_router(guard: OriginGuard, runtime: AgentRuntime) -> APIRouter:
             if str(error) in {
                 "agent_attachment_not_found",
                 "agent_attachment_not_image",
+                "agent_attachment_invalid",
             }:
                 raise HTTPException(422, detail={"code": "INVALID_AGENT_ATTACHMENT"}) from error
             raise

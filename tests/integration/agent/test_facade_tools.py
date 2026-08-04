@@ -152,10 +152,15 @@ async def test_asset_inspection_returns_newest_assets_first(tmp_path: Path) -> N
             },
         ),
         (
-            "prepare_prompt",
-            {"task": "validate", "prompt_asset_ref": "prompt-1"},
-            "prompt.validate",
-            {"prompt_asset_id": "prompt-1"},
+            "understand_image",
+            {"source_asset_ref": "asset-1", "question": "What object is visible?"},
+            "image.understand_for_agent",
+            {
+                "asset_id": "asset-1",
+                "question": "What object is visible?",
+                "provider_profile": "gemini/google/default",
+                "model": "gemini-flash-lite-latest",
+            },
         ),
         (
             "generate_images",
@@ -406,33 +411,6 @@ async def test_generate_model3d_cannot_dispatch_without_textures_and_pbr(
     ("facade_name", "arguments", "internal_name"),
     [
         (
-            "prepare_prompt",
-            {
-                "task": "extract",
-                "analysis_asset_ref": "analysis-1",
-                "analysis_kind": "content",
-            },
-            "prompt.extract_bilingual",
-        ),
-        (
-            "prepare_prompt",
-            {
-                "task": "merge",
-                "content_prompt_ref": "content-1",
-                "style_prompt_ref": "style-1",
-            },
-            "prompt.merge",
-        ),
-        (
-            "prepare_prompt",
-            {
-                "task": "rewrite",
-                "prompt_asset_ref": "prompt-1",
-                "instruction": "Make it concise.",
-            },
-            "prompt.rewrite",
-        ),
-        (
             "generate_images",
             {
                 "mode": "from_image",
@@ -544,6 +522,36 @@ async def test_facade_operation_variants_have_unambiguous_routes(
 
     assert not result.is_error
     assert registry.calls[0][2] == internal_name
+
+
+@pytest.mark.agent
+@pytest.mark.asyncio
+async def test_generate_images_materializes_a_direct_prompt_before_dispatch(tmp_path: Path) -> None:
+    registry = RecordingRegistry()
+    created: list[tuple[AIPicToolInvocation, str, str]] = []
+    tool = next(
+        item
+        for item in facade_tools(
+            registry,  # type: ignore[arg-type]
+            lambda: AIPicToolInvocation(tmp_path, "project-bound-by-host", "conversation-request"),
+            prompt_creator=lambda invocation, prompt, request_id: (
+                created.append((invocation, prompt, request_id)) or "prompt-direct"
+            ),
+        )
+        if item.name == "generate_images"
+    )
+
+    result = await tool.execute(
+        "call-direct-prompt",
+        {"mode": "from_prompt", "prompt": "A small clay fox", "candidate_count": 2},
+        ToolContext(()),
+        CancellationToken(),
+    )
+
+    assert created and created[0][1] == "A small clay fox"
+    assert registry.calls[0][2] == "image.generate"
+    assert registry.calls[0][4]["prompt_asset_id"] == "prompt-direct"
+    assert result.details["data"]["prompt_asset_id"] == "prompt-direct"
 
 
 @pytest.mark.agent

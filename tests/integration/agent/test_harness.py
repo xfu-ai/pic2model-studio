@@ -15,6 +15,7 @@ from aipic_to_model.agent.core.models import (
     ToolCall,
     ToolResult,
     Usage,
+    UserMessage,
 )
 from aipic_to_model.agent.core.tool import ToolContext, ToolExecutionMode
 from aipic_to_model.agent.harness import AgentHarness, CompactionSettings, HarnessPhase
@@ -57,6 +58,25 @@ def test_output_budget_matches_pi_model_cap_and_remaining_context() -> None:
 
     assert clamp_max_output_tokens(messages, 1_000_000, 384_000) == 384_000
     assert clamp_max_output_tokens(messages, 10_000, 384_000) == 1
+
+
+def test_output_budget_accounts_for_tool_schemas() -> None:
+    messages = (UserMessage("brief request"),)
+    tools = (
+        {
+            "type": "function",
+            "function": {
+                "name": "large_tool",
+                "description": "x" * 4_000,
+                "parameters": {"type": "object"},
+            },
+        },
+    )
+
+    without_tools = clamp_max_output_tokens(messages, 32_768, 28_672)
+    with_tools = clamp_max_output_tokens(messages, 32_768, 28_672, tools)
+
+    assert with_tools < without_tools
 
 
 @pytest.mark.agent

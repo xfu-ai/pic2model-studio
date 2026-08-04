@@ -27,6 +27,10 @@
     "active": true,
     "targets": "nsis",
     "icon": ["icons/icon.ico", "icons/icon.png"],
-    "resources": ["resources/sidecar/*"]
+    "resources": {
+      "resources/sidecar/*": "sidecar/",
+      "../../.local/ollama/v0.32.5/": "ollama/",
+      "../../.local/ollama-models/": "ollama-models/"
+    }
   }
 }

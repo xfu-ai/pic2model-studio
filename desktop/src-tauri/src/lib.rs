@@ -175,6 +175,19 @@ impl SidecarState {
             .env("AIPIC_TO_MODEL_RENDERER_ORIGIN", &renderer_origin)
             .stdin(Stdio::null())
             .stdout(Stdio::piped());
+        let controlled_e2e = std::env::var("AIPIC_CONTROLLED_E2E")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let ollama_management_disabled = std::env::var("AIPIC_TO_MODEL_MANAGE_OLLAMA")
+            .ok()
+            .as_deref()
+            == Some("0");
+        if !controlled_e2e && !ollama_management_disabled {
+            command.env("AIPIC_TO_MODEL_MANAGE_OLLAMA", "1");
+        } else {
+            command.env_remove("AIPIC_TO_MODEL_MANAGE_OLLAMA");
+        }
         #[cfg(debug_assertions)]
         command.stderr(Stdio::inherit());
         #[cfg(not(debug_assertions))]

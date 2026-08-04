@@ -1,0 +1,25 @@
+# Python 3.11 isolated TripoSR baseline validated on Windows with an RTX 5080.
+# The +cu128 wheels are hosted by PyTorch; every direct dependency is pinned.
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+numpy==1.26.4
+Pillow==10.4.0
+omegaconf==2.3.0
+einops==0.7.0
+transformers==4.35.0
+trimesh==4.0.5
+rembg==2.0.67
+onnxruntime-gpu==1.20.2
+huggingface-hub==0.17.3
+imageio[ffmpeg]==2.36.1
+xatlas==0.0.9
+moderngl==5.10.0
+opencv-python-headless==4.11.0.86
+
+# Install torchmcubes separately from this exact source revision. Its upstream CMake
+# build needs a full CUDA Toolkit when PyTorch is CUDA-enabled. A CPU-only extension
+# is also supported; TripoSR then keeps neural inference on CUDA and performs only
+# marching cubes on CPU.
+# https://github.com/tatsy/torchmcubes.git@3381600ddc3d2e4d74222f8495866be5fafbace4

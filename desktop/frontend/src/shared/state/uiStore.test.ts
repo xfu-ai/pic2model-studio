@@ -66,6 +66,24 @@ describe("WorkspaceStore", () => {
     });
   });
 
+  it("restores a scoped candidate result and suitability analysis references", () => {
+    const restored = parseWorkspaceState(JSON.stringify({
+      candidate_result: { job_id: "candidate-job", asset_ids: ["candidate-a", "candidate-b"] },
+      reference_context: {
+        suitability_asset_id: "source-image",
+        suitability_analysis_asset_id: "suitability-report",
+      },
+    }));
+    expect(restored.candidate_result).toEqual({
+      job_id: "candidate-job",
+      asset_ids: ["candidate-a", "candidate-b"],
+    });
+    expect(restored.reference_context).toEqual(expect.objectContaining({
+      suitability_asset_id: "source-image",
+      suitability_analysis_asset_id: "suitability-report",
+    }));
+  });
+
   it("persists a debounced state PATCH and ignores duplicate workspace actions", async () => {
     const updateWorkspaceState = vi.fn().mockResolvedValue({ ...DEFAULT_WORKSPACE, workspace_mode: "image" });
     const store = new WorkspaceStore(DEFAULT_WORKSPACE, "project-1", { updateWorkspaceState } as never, 0);

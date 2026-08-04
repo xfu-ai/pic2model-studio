@@ -286,7 +286,7 @@ describe("ModelViewport", () => {
     expect(document.querySelector(".model-workspace")).toHaveClass("has-generation-status");
   });
 
-  it("shows an actionable interrupted quality-gate error without collapsing the preview", async () => {
+  it("shows an actionable crop-confirmation error without collapsing the preview", async () => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn().mockReturnValue("blob:default-cube") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
     const api = {
@@ -298,14 +298,14 @@ describe("ModelViewport", () => {
         stage: "postprocessing",
         progress: 0,
         error: {
-          code: "MULTIVIEW_MANUAL_CONFIRMATION_REQUIRED",
-          user_message: "Confirm all six checks.",
+          code: "MULTIVIEW_CROP_CONFIRMATION_REQUIRED",
+          user_message: "Confirm the final crops.",
         },
       }] }),
     };
     render(<ModelViewport projectId="project-1" api={api as never} workflowContext={{ asset_id: null, target_triangles: 50000, generation_job_id: "job-1" }} />);
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "3D 生成未开始：最终裁切的三视图尚未完成质量确认。请返回三视图制作页重新确认后提交。",
+      "3D 生成未开始：尚未确认最终裁切的正、侧、背三张视图。请返回三视图制作页确认裁切后重新提交。",
     );
     expect(document.querySelector(".model-workspace")).toHaveClass("has-generation-status");
     expect(document.querySelector("model-viewer")).toBeInTheDocument();

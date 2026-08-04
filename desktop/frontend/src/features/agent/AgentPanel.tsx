@@ -32,7 +32,7 @@ function requestId() { return crypto.randomUUID(); }
 const defaultHostClient = new HostClient();
 const initialMessageLimit = 20;
 
-const agentSystemPrompt = "You are the Pic2Model Studio desktop workflow assistant. Use the fixed managed facade tools for image, selection, prompt, multiview, 3D generation, preview, conversion, packaging, and durable Job requests. Paid actions must wait for the user's desktop approval. Project creation, opening, switching, import, export destinations, settings, credentials, approvals, and visual confirmations belong to the user and desktop host. Images belong with a final user-facing answer, never in a tool explanation. Before presenting an existing managed image, inspect it with inspect_workspace(view=asset_details). Do not show opaque asset or Job references to the user. Never use read, write, edit, or bash to locate, inspect, read, or modify managed result assets; if a managed result is not directly inspectable through a facade Tool, report only the structured result already provided by the desktop. A Tool result with status=awaiting_ui_action means the requested desktop action has not completed yet: say that the matching workspace was opened and tell the user what must be completed there; never claim that a preview was opened, captured, confirmed, or otherwise completed until a later result explicitly confirms it. Selection references returned by multiview region detection are not asset references and must never be passed to inspect_workspace(view=asset_details). When an internal terminal-event instruction says FINAL RESPONSE ONLY or says not to call more tools, reply immediately without calling any Tool; that instruction takes precedence over optional inspection or continuation guidance. After tool work is complete, always provide a concise final summary; never intentionally finish with an empty response.";
+const agentSystemPrompt = "You are the Pic2Model Studio desktop workflow assistant. Reply in the language of the user's latest natural-language request: Chinese input receives Chinese output, English input receives English output, and Chinese is the default when the language is ambiguous. Internal tool descriptions, runtime snapshots, and task events may be English; never let them change the user-facing reply language. Use the fixed managed facade tools for image, selection, multiview, 3D generation, preview, conversion, packaging, and durable Job requests. For image generation, write a complete prompt directly in generate_images; the desktop saves it and displays it with the generated images. When an attached image is included directly in the current multimodal message, understand it directly and do not call understand_image for the same question. When the message provides only a managed image reference, use understand_image for ordinary visual facts. Call analyze_image(content) only when the user requests a reusable content specification, analyze_image(style) only when the user requests style analysis, preservation, comparison, or reuse, and analyze_image(3d_suitability) only when the user requests or the task is genuinely uncertain about 3D readiness. Do not call content and style analysis together unless the user has separate requirements; use refresh only when the user explicitly asks to reanalyze. Paid actions must wait for the user's desktop approval. Project creation, opening, switching, import, export destinations, settings, credentials, approvals, and visual confirmations belong to the user and desktop host. Before detecting multiview regions or generating a model from multiview inputs, inspect the persisted workspace summary. If it contains a multiview set plus distinct front, side, and back crop assets confirmed by the user, treat those crops as authoritative, skip region detection, and use them directly for multiview 3D generation. The multiview_ref must be the persisted multiview set_id, never the source sheet asset ID or any crop asset ID. Images belong with a final user-facing answer, never in a tool explanation. Before presenting an existing managed image, inspect it with inspect_workspace(view=asset_details). Do not show opaque asset or Job references to the user. Never use read, write, edit, or bash to locate, inspect, read, or modify managed result assets; if a managed result is not directly inspectable through a facade Tool, report only the structured result already provided by the desktop. A Tool result with status=awaiting_ui_action means the requested desktop action has not completed yet: say that the matching workspace was opened and tell the user what must be completed there; never claim that a preview was opened, captured, confirmed, or otherwise completed until a later result explicitly confirms it. Selection references returned by multiview region detection are not asset references and must never be passed to inspect_workspace(view=asset_details). When a task terminal event arrives, continue the original user goal autonomously with the next safe Tool step; pause only for approval, a material ambiguity, or a required desktop action. After tool work is complete, always provide a concise final summary; never intentionally finish with an empty response.";
 
 function conversationAge(timestamp?: string) {
   const milliseconds = timestamp ? Date.parse(timestamp) : Number.NaN;
@@ -57,6 +57,25 @@ type LiveTool = {
 };
 
 type ConversationStatus = "ready" | "working" | "completed" | "failed";
+
+function providerFailureMessage(reason?: string): string {
+  switch (reason) {
+    case "resource_exhausted":
+      return "Local Qwen stopped because GPU or system memory was exhausted. Close GPU-heavy apps, retry, or select Qwen3-VL 4B in Settings.";
+    case "runner_unavailable":
+      return "The local Qwen model runner stopped unexpectedly. The app will keep Ollama running; retry this message.";
+    case "model_load_failed":
+      return "The local Qwen model could not be loaded. Check the model status in Settings and retry.";
+    case "context_overflow":
+      return "This Agent conversation exceeded the local model context window. Start a new conversation or shorten the request.";
+    case "vision_request":
+      return "Local Qwen could not process the attached image. Try a smaller PNG, JPG, BMP, or WEBP image.";
+    case "request_format":
+      return "The local model rejected the Agent request format. Retry once, then check the model status in Settings.";
+    default:
+      return "The Agent stopped before it could finish its response. You can try again.";
+  }
+}
 type UiAction = NonNullable<NonNullable<AgentMessageDto["details"]>["ui_action"]>;
 export type AgentWorkspaceAction = {
   mode: WorkspaceMode;
@@ -66,7 +85,13 @@ export type AgentWorkspaceAction = {
   runId?: string;
   instruction?: string;
   jobId?: string;
+  jobType?: string;
   resultAssetIds?: string[];
+  prompt?: string;
+  promptAssetId?: string;
+  candidateCount?: number;
+  aspectRatio?: string;
+  analysisKind?: "content" | "style" | "suitability";
 };
 
 const workspaceModes = new Set<WorkspaceMode>([
@@ -144,9 +169,12 @@ function workspaceModeForJobType(jobType: string | undefined): WorkspaceMode | n
     "image.generate",
     "image.transform",
     "image.generate_variants",
+  ].includes(jobType)) return "prompt_image";
+  if ([
     "image.upscale",
     "image.upscale_local",
     "image.remove_background",
+    "image.remove_background_local",
     "image.inpaint_selection",
     "element.export_transparent",
   ].includes(jobType)) return "candidate";
@@ -159,7 +187,13 @@ function workspaceModeForJobType(jobType: string | undefined): WorkspaceMode | n
 
 function workspaceModeForCompletedTool(tool: LiveTool): WorkspaceMode | null {
   if (tool.state !== "completed" || tool.isError || tool.result?.details?.status !== "succeeded") return null;
-  if (tool.toolName === "prepare_prompt") return "prompt_image";
+  if (tool.toolName === "split_image") return "target_extract";
+  if (
+    tool.toolName === "edit_image"
+    && ["trim_transparent", "normalize", "remove_background_local"].includes(
+      typeof tool.arguments.operation === "string" ? tool.arguments.operation : "",
+    )
+  ) return "target_extract";
   return null;
 }
 
@@ -176,6 +210,12 @@ function workspaceRequest(
   const source = action?.asset_id
     ?? (typeof argumentsValue?.source_asset_ref === "string" ? argumentsValue.source_asset_ref : undefined)
     ?? (typeof argumentsValue?.source_asset_id === "string" ? argumentsValue.source_asset_id : undefined);
+  const promptAssetId = typeof argumentsValue?.prompt_asset_ref === "string"
+    ? argumentsValue.prompt_asset_ref
+    : typeof argumentsValue?.prompt_asset_id === "string"
+      ? argumentsValue.prompt_asset_id
+      : undefined;
+  const prompt = typeof argumentsValue?.prompt === "string" ? argumentsValue.prompt : undefined;
   return {
     mode,
     method: mode === "target_extract"
@@ -189,6 +229,14 @@ function workspaceRequest(
         ? "请框选要提取的目标；确认后由本页提交生成独立目标图。"
         : undefined
     ),
+    prompt: mode === "prompt_image" ? prompt : undefined,
+    promptAssetId: mode === "prompt_image" ? promptAssetId : undefined,
+    candidateCount: mode === "prompt_image" && typeof argumentsValue?.candidate_count === "number"
+      ? argumentsValue.candidate_count
+      : undefined,
+    aspectRatio: mode === "prompt_image" && typeof argumentsValue?.aspect_ratio === "string"
+      ? argumentsValue.aspect_ratio
+      : undefined,
   };
 }
 
@@ -260,9 +308,8 @@ function resultMessage(tool: LiveTool): AgentMessageDto | undefined {
   };
 }
 
-function AssistantMessage({ message, hideThinking, streamingText, projectId, api, imageAssetIds }: {
+function AssistantMessage({ message, streamingText, projectId, api, imageAssetIds }: {
   message: AgentMessageDto;
-  hideThinking: boolean;
   streamingText?: string;
   projectId?: string;
   api?: ApiClient;
@@ -270,29 +317,17 @@ function AssistantMessage({ message, hideThinking, streamingText, projectId, api
 }) {
   const blocks = streamingText === undefined
     ? contentBlocks(message)
-    : [{ type: "text", text: streamingText } satisfies AgentContentBlock];
+    : [
+        ...(streamingText
+          ? [{ type: "text", text: streamingText } satisfies AgentContentBlock]
+          : []),
+      ];
   const rendered: ReactNode[] = [];
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index];
     if (block.type === "text" && block.text.trim()) {
       rendered.push(<div className="agent-assistant-text" key={`text-${index}`}><MarkdownContent>{block.text.trim()}</MarkdownContent></div>);
       continue;
-    }
-    if (block.type === "thinking") {
-      const thinking: string[] = [];
-      while (blocks[index]?.type === "thinking") {
-        const next = blocks[index] as Extract<AgentContentBlock, { type: "thinking" }>;
-        if (next.thinking.trim()) thinking.push(next.thinking.trim());
-        index += 1;
-      }
-      index -= 1;
-      if (thinking.length) {
-        rendered.push(
-          <div className="agent-thinking" key={`thinking-${index}`}>
-            {hideThinking ? "Thinking..." : <MarkdownContent>{thinking.join("\n\n")}</MarkdownContent>}
-          </div>,
-        );
-      }
     }
   }
   if (!rendered.length) return null;
@@ -420,6 +455,27 @@ function pendingJobFromMessages(messages: AgentMessageDto[]) {
   return null;
 }
 
+function pendingJobWorkspaceActionFromMessages(messages: AgentMessageDto[], jobId: string | null): AgentWorkspaceAction | null {
+  if (!jobId) return null;
+  const calls = new Map<string, Extract<AgentContentBlock, { type: "tool_call" }>>();
+  for (const message of messages) {
+    for (const block of contentBlocks(message)) {
+      if (block.type === "tool_call") calls.set(block.id, block);
+    }
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (queuedJobId(message) !== jobId) continue;
+    const call = message.tool_call_id ? calls.get(message.tool_call_id) : undefined;
+    const toolName = message.tool_name ?? call?.name;
+    const argumentsValue = call?.arguments;
+    const mode = workspaceModeForApprovalTool(toolName, argumentsValue)
+      ?? workspaceModeForJobType(message.details?.job?.job_type);
+    return mode ? workspaceRequest(mode, undefined, argumentsValue) : null;
+  }
+  return null;
+}
+
 function isInternalJobContinuation(message: AgentMessageDto) {
   return Boolean(terminalJobId(message))
     || (
@@ -477,7 +533,7 @@ function upsertMessage(messages: AgentMessageDto[], message: AgentMessageDto) {
   return messages.map((item) => item.id === message.id ? message : item);
 }
 
-export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueued, onWorkspaceAction }: { projectId: string; api: ApiClient; host?: HostClient; onJobQueued?(): void; onWorkspaceAction?(action: AgentWorkspaceAction): void }) {
+export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueued, onWorkspaceAction }: { projectId: string; api: ApiClient; host?: HostClient; onJobQueued?(jobId: string, workspaceMode: WorkspaceMode | null, jobType?: string): void; onWorkspaceAction?(action: AgentWorkspaceAction): void }) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentMessageDto[]>([]);
   const [liveTools, setLiveTools] = useState<Record<string, LiveTool>>({});
@@ -491,10 +547,10 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
   const [error, setError] = useState("");
   const [conversationStatus, setConversationStatus] = useState<ConversationStatus>("ready");
   const [expanded, setExpanded] = useState(false);
-  const [hideThinking, setHideThinking] = useState(false);
   const [approvalState, setApprovalState] = useState<Record<string, string>>({});
   const [pendingJobId, setPendingJobId] = useState<string | null>(null);
   const [pendingJobWorkspaceMode, setPendingJobWorkspaceMode] = useState<WorkspaceMode | null>(null);
+  const [pendingJobWorkspaceAction, setPendingJobWorkspaceAction] = useState<AgentWorkspaceAction | null>(null);
   const [conversations, setConversations] = useState<AgentConversationDto[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -508,6 +564,8 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
   const initializedProject = useRef<string | null>(null);
   const handledWorkspaceActions = useRef(new Set<string>());
   const toolArguments = useRef(new Map<string, Record<string, unknown>>());
+  const pendingJobWorkspaceActionRef = useRef<AgentWorkspaceAction | null>(null);
+  const approvalWorkspaceContext = useRef(new Map<string, AgentWorkspaceAction>());
   const suppressedJobTerminalNotifications = useRef(new Set<string>());
   const nativeDropHandler = useRef<(items: AgentImageDropItem[]) => void>(() => undefined);
   const loadingOlderMessagesRef = useRef(false);
@@ -578,6 +636,8 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
     setApprovalState({});
     setPendingJobId(null);
     setPendingJobWorkspaceMode(null);
+    setPendingJobWorkspaceAction(null);
+    pendingJobWorkspaceActionRef.current = null;
     setConversationStatus(initialConversationStatus(conversation));
     try {
       const restored = await api.agentMessages(projectId, conversation.id, initialMessageLimit);
@@ -586,7 +646,11 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       setConversationId(conversation.id);
       rememberExistingWorkspaceActions(restored.items);
       applyLatestMessagePage(restored);
-      setPendingJobId(pendingJobFromMessages(restored.items));
+      const pendingJob = pendingJobFromMessages(restored.items);
+      setPendingJobId(pendingJob);
+      const pendingWorkspaceAction = pendingJobWorkspaceActionFromMessages(restored.items, pendingJob);
+      pendingJobWorkspaceActionRef.current = pendingWorkspaceAction;
+      setPendingJobWorkspaceAction(pendingWorkspaceAction);
       setBusy(conversation.state === "running");
     } catch {
       if (switchVersion.current === version) {
@@ -620,9 +684,11 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       prependScrollAnchor.current = null;
       setLiveTools({});
       setStreamingText("");
-      setApprovalState({});
-      setPendingJobId(null);
-      setPendingJobWorkspaceMode(null);
+    setApprovalState({});
+    setPendingJobId(null);
+    setPendingJobWorkspaceMode(null);
+    setPendingJobWorkspaceAction(null);
+    pendingJobWorkspaceActionRef.current = null;
       setBusy(false);
       setConversationStatus("ready");
       setConversations((items) => [created, ...items.filter((item) => item.id !== created.id)]);
@@ -666,7 +732,9 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       if (event.event_type === "message.delta") setStreamingText((text) => text + (payload.text ?? ""));
       if (event.event_type === "message.completed" && payload.message) {
         setMessages((items) => upsertMessage(items, payload.message!));
-        if (payload.message.role === "assistant") setStreamingText("");
+        if (payload.message.role === "assistant") {
+          setStreamingText("");
+        }
       }
       if (event.event_type === "tool.call" && payload.tool_call) {
         const call = payload.tool_call;
@@ -699,13 +767,43 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
           suppressedJobTerminalNotifications.current.add(completedArguments.job_ref);
           setPendingJobId((current) => current === completedArguments.job_ref ? null : current);
           setPendingJobWorkspaceMode(null);
+          setPendingJobWorkspaceAction(null);
+          pendingJobWorkspaceActionRef.current = null;
+        }
+        const directPromptAssetId = typeof payload.result?.details?.data?.prompt_asset_id === "string"
+          ? payload.result.details.data.prompt_asset_id
+          : undefined;
+        const requestedPromptWorkspaceAction = workspaceRequest(
+          "prompt_image", undefined, completedArguments,
+        );
+        const promptWorkspaceAction = payload.tool_name === "generate_images"
+          ? {
+              ...requestedPromptWorkspaceAction,
+              promptAssetId: directPromptAssetId ?? requestedPromptWorkspaceAction.promptAssetId,
+            }
+          : null;
+        const approvalId = payload.result?.details?.ui_action?.action_id;
+        if (approvalId && promptWorkspaceAction) {
+          approvalWorkspaceContext.current.set(approvalId, promptWorkspaceAction);
+          handledWorkspaceActions.current.add(approvalId);
+          onWorkspaceAction?.({ ...promptWorkspaceAction, actionId: approvalId });
         }
         const queuedJobId = payload.result?.details?.status === "queued"
           ? payload.result.details.job?.job_id
           : undefined;
         if (queuedJobId) {
+          const queuedWorkspaceMode = workspaceModeForApprovalTool(
+            payload.tool_name,
+            completedArguments,
+          );
+          const queuedWorkspaceAction = promptWorkspaceAction ?? (queuedWorkspaceMode
+            ? workspaceRequest(queuedWorkspaceMode, undefined, completedArguments)
+            : null);
           setPendingJobId(queuedJobId);
-          onJobQueued?.();
+          setPendingJobWorkspaceMode(queuedWorkspaceMode);
+          pendingJobWorkspaceActionRef.current = queuedWorkspaceAction;
+          setPendingJobWorkspaceAction(queuedWorkspaceAction);
+          onJobQueued?.(queuedJobId, queuedWorkspaceMode, payload.result?.details?.job?.job_type);
         }
         setLiveTools((tools) => ({
           ...tools,
@@ -741,7 +839,7 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
         setLiveTools({});
         setBusy(false);
         setConversationStatus("failed");
-        setError("The Agent stopped before it could finish its response. You can try again.");
+        setError(providerFailureMessage(payload.reason));
         void api.agentMessages(projectId, conversationId, initialMessageLimit).then((result) => {
           if (live) applyLatestMessagePage(result);
         }).catch(() => undefined);
@@ -833,7 +931,18 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       const completedKey = completedMode ? `completed-tool:${tool.id}:${completedMode}` : null;
       if (completedMode && completedKey && !handledWorkspaceActions.current.has(completedKey)) {
         handledWorkspaceActions.current.add(completedKey);
-        onWorkspaceAction?.(workspaceRequest(completedMode));
+        const operation = typeof tool.arguments.operation === "string"
+          ? tool.arguments.operation
+          : undefined;
+        onWorkspaceAction?.({
+          ...workspaceRequest(completedMode, undefined, tool.arguments),
+          jobType: tool.toolName === "split_image"
+            ? "image.split_local"
+            : operation
+              ? `${tool.toolName}.${operation}`
+              : tool.toolName,
+          resultAssetIds: tool.result?.details?.output_asset_ids ?? [],
+        });
       }
     }
   }, [liveTools, messages, onWorkspaceAction, openWorkspaceAction]);
@@ -862,27 +971,37 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
         setBusy(true);
         const completion = job.status === "succeeded"
           ? job.job_type === "multiview.detect_regions"
-            ? `Task job_id=${job.id} completed, result_selection_ids=${job.output_asset_ids.join(",") || "none"}. The multiview regions were detected successfully. These are selection references, not asset references: do not pass them to inspect_workspace(view=asset_details). Reply to the user now with a concise completion summary and do not call more tools unless the user asks.`
-            : job.job_type?.startsWith("image.analyze_") || job.job_type === "image.evaluate_3d_suitability"
-              ? `Task job_id=${job.id} completed, result_asset_ids=${job.output_asset_ids.join(",") || "none"}. This is a managed analysis document, not a displayable image. FINAL RESPONSE ONLY: report that the requested analysis succeeded and name its analysis type. Do not call inspect_workspace, read, write, edit, bash, or any other Tool, and do not expose opaque references.`
-              : job.job_type?.startsWith("image.")
-              ? `Task job_id=${job.id} completed, result_asset_ids=${job.output_asset_ids.join(",") || "none"}. The desktop has already validated and attached these generated images. FINAL RESPONSE ONLY: reply now with a concise completion summary. Do not call inspect_workspace or any other Tool, and do not expose opaque references.`
-              : job.job_type === "prompt.rewrite"
-                ? `Task job_id=${job.id} completed, result_asset_ids=${job.output_asset_ids.join(",") || "none"}. The managed prompt rewrite succeeded. Continue the user's requested multi-step workflow if one remains; otherwise reply with a concise completion summary.`
-                : `Task job_id=${job.id} completed, result_asset_ids=${job.output_asset_ids.join(",") || "none"}. FINAL RESPONSE ONLY: reply with a concise completion summary. Do not call inspect_workspace or any other Tool, do not expose opaque references, and do not claim a UI action completed unless its result explicitly confirms completion.`
+            ? `Task job_id=${job.id} completed, result_selection_ids=${job.output_asset_ids.join(",") || "none"}. These are selection references, not asset references. Continue the original user goal autonomously: take the next safe Tool step when one remains. Pause only for approval, a material ambiguity, or a required desktop action.`
+            : `Task job_id=${job.id} completed, result_asset_ids=${job.output_asset_ids.join(",") || "none"}. Continue the original user goal autonomously: take the next safe Tool step when one remains. Pause only for approval, a material ambiguity, or a required desktop action. Do not expose opaque references in the final user-facing response.`
           : `Task job_id=${job.id} ended with status=${job.status}, error=${job.error?.user_message ?? "none"}. Explain the reason and provide a continuation path.`;
         await api.sendAgentMessage(projectId, conversationId, completion, `agent-job-terminal-${job.id}`, typeof eventApi === "function" ? false : true);
         if (!live) return;
         if (job.status === "succeeded") {
           const resultMode = pendingJobWorkspaceMode ?? workspaceModeForJobType(job.job_type);
+          const pendingWorkspaceAction = pendingJobWorkspaceAction ?? pendingJobWorkspaceActionRef.current;
+          const analysisKind = job.job_type === "image.analyze_content"
+            ? "content"
+            : job.job_type === "image.analyze_style"
+              ? "style"
+              : job.job_type === "image.evaluate_3d_suitability"
+                ? "suitability"
+              : undefined;
           if (resultMode) onWorkspaceAction?.({
+            ...(pendingWorkspaceAction?.mode === resultMode
+              ? pendingWorkspaceAction
+              : { mode: resultMode }),
             mode: resultMode,
             jobId: job.id,
+            jobType: job.job_type,
             resultAssetIds: job.output_asset_ids,
+            ...(analysisKind ? { assetId: job.input_asset_ids?.[0] } : {}),
+            analysisKind,
           });
         }
         setPendingJobId(null);
         setPendingJobWorkspaceMode(null);
+        setPendingJobWorkspaceAction(null);
+        pendingJobWorkspaceActionRef.current = null;
         if (typeof eventApi !== "function") {
           const updated = await api.agentMessages(projectId, conversationId, initialMessageLimit);
           if (live) applyLatestMessagePage(updated);
@@ -897,7 +1016,7 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
     void poll();
     const timer = window.setInterval(() => void poll(), 2_500);
     return () => { live = false; window.clearInterval(timer); };
-  }, [api, applyLatestMessagePage, conversationId, eventApi, onWorkspaceAction, pendingJobId, pendingJobWorkspaceMode, projectId]);
+  }, [api, applyLatestMessagePage, conversationId, eventApi, onWorkspaceAction, pendingJobId, pendingJobWorkspaceAction, pendingJobWorkspaceMode, projectId]);
 
   const send = async () => {
     if ((!draft.trim() && !attachments.length) || !conversationId || busy || switching || attachmentBusy) return;
@@ -1088,9 +1207,17 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       if (approved && conversationId) {
         const queuedJobId = result.status === "queued" ? result.job?.job_id : undefined;
         if (queuedJobId) {
+          const queuedWorkspaceAction = approvalWorkspaceContext.current.get(approvalId);
+          const workspaceMode = queuedWorkspaceAction?.mode ?? queuedWorkspaceMode ?? null;
+          const actionWithJob = queuedWorkspaceAction
+            ? { ...queuedWorkspaceAction, jobId: queuedJobId }
+            : null;
           setPendingJobId(queuedJobId);
-          setPendingJobWorkspaceMode(queuedWorkspaceMode ?? null);
-          onJobQueued?.();
+          setPendingJobWorkspaceMode(workspaceMode);
+          pendingJobWorkspaceActionRef.current = actionWithJob;
+          setPendingJobWorkspaceAction(actionWithJob);
+          if (actionWithJob) onWorkspaceAction?.(actionWithJob);
+          onJobQueued?.(queuedJobId, workspaceMode, result.job?.job_type);
         }
         setBusy(true);
         const continuation = result.status === "queued"
@@ -1128,7 +1255,7 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
     const approvalId = action?.type === "approval_required" || action?.type === "confirm_external_paid" ? action.action_id : undefined;
     const workspaceMode = workspaceModeForAction(action, message?.tool_name, argumentsValue);
     return <>
-      {workspaceMode && <div className="agent-approval"><p>{action?.type === "capture_model_preview" ? "The model preview must be captured explicitly in the desktop workspace." : `Continue this action in the ${workspaceLabels[workspaceMode]} workspace.`}</p><button className="primary" onClick={() => openWorkspaceAction(action)}>Open {workspaceLabels[workspaceMode]}</button></div>}
+      {workspaceMode && <div className="agent-approval"><p>{action?.type === "capture_model_preview" ? "The model preview must be captured explicitly in the desktop workspace." : `Continue this action in the ${workspaceLabels[workspaceMode]} workspace.`}</p><button className="primary" onClick={() => openWorkspaceAction(action, false, message?.tool_name, argumentsValue)}>Open {workspaceLabels[workspaceMode]}</button></div>}
       {approvalId && <div className="agent-approval"><p>{approvalState[approvalId] ?? "This action invokes an external service. Confirm before continuing."}</p>{!approvalState[approvalId] && <div><button onClick={() => void decide(approvalId, false)}>Decline</button><button className="primary" onClick={() => void decide(approvalId, true, workspaceMode)}>Approve and run</button></div>}</div>}
     </>;
   };
@@ -1143,7 +1270,7 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       transcript.push(<UserMessage key={message.id} message={message} projectId={projectId} api={api} />);
     }
     if (message.role === "assistant") {
-      transcript.push(<AssistantMessage key={message.id} message={message} hideThinking={hideThinking} projectId={projectId} api={api} imageAssetIds={finalAssistantImageAssetIds(messages, messageIndex)} />);
+      transcript.push(<AssistantMessage key={message.id} message={message} projectId={projectId} api={api} imageAssetIds={finalAssistantImageAssetIds(messages, messageIndex)} />);
       for (const block of contentBlocks(message)) {
         if (block.type !== "tool_call") continue;
         renderedCallIds.add(block.id);
@@ -1208,9 +1335,9 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       {!hasOlderMessages && historyBefore === null && messages.length >= initialMessageLimit
         ? <p className="agent-history-start">Start of conversation</p>
         : null}
-      <div className="agent-conversation-controls"><button type="button" onClick={() => setExpanded((value) => !value)}>{expanded ? <CaretDown size={14} /> : <CaretRight size={14} />}{expanded ? "Hide tool output" : "Show tool output"}</button><button type="button" onClick={() => setHideThinking((value) => !value)}>{hideThinking ? "Show thinking" : "Hide thinking"}</button></div>
+      <div className="agent-conversation-controls"><button type="button" onClick={() => setExpanded((value) => !value)}>{expanded ? <CaretDown size={14} /> : <CaretRight size={14} />}{expanded ? "Hide tool output" : "Show tool output"}</button></div>
       {transcript.length ? transcript : <p className="agent-empty-state">Describe the model you want to make, or ask the Agent to continue with the current asset.</p>}
-      {streamingText && <AssistantMessage message={{ id: "streaming", role: "assistant", content: "" }} hideThinking={hideThinking} streamingText={streamingText} />}
+      {streamingText && <AssistantMessage message={{ id: "streaming", role: "assistant", content: "" }} streamingText={streamingText} />}
       <p className={`agent-run-status ${conversationStatus}`} role="status">
         {conversationStatus === "working" && <><SpinnerGap className="spin" /> Agent is working…</>}
         {pendingJobId && !busy && "Background task is running. You can keep using the Agent; it will continue here when the task finishes."}

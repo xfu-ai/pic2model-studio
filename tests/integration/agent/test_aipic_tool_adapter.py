@@ -131,7 +131,7 @@ def test_adapter_preserves_queued_job_and_ui_action_details() -> None:
     assert isinstance(job, dict) and job["job_id"] == "job"
 
 
-def test_runtime_exposes_fixed_fifteen_tools_and_projects_approval_details(tmp_path) -> None:
+def test_runtime_exposes_fixed_tools_and_projects_approval_details(tmp_path) -> None:
     from aipic_to_model.agent.integrations.runtime import (
         AgentRuntime,
         _message_dto,
@@ -156,7 +156,7 @@ def test_runtime_exposes_fixed_fifteen_tools_and_projects_approval_details(tmp_p
         "inspect_workspace",
         "select_asset",
         "analyze_image",
-        "prepare_prompt",
+        "understand_image",
         "generate_images",
         "edit_image",
         "split_image",
@@ -216,7 +216,6 @@ def test_runtime_projects_pi_content_blocks_and_tool_result_pairing() -> None:
     )
     projected = _message_dto(assistant)
     assert projected["content"] == [
-        {"type": "thinking", "thinking": "Inspect [REDACTED] at <workspace-path>", "redacted": False},
         {"type": "text", "text": "I will inspect the current asset."},
         {
             "type": "tool_call",

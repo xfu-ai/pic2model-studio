@@ -131,7 +131,7 @@ class GenerationRequest(BaseModel):
     prompt_asset_id: str = Field(min_length=1)
     source_asset_id: str | None = None
     provider_profile: str = Field(min_length=1)
-    channel: Literal["banana", "gpt_image", "meshy", "tripo"]
+    channel: Literal["banana", "gpt_image", "meshy", "tripo", "z_image"]
     mode: Literal["t2i", "i2i"]
     model: str = Field(min_length=1)
     candidate_count: int = Field(ge=1, le=8)
@@ -140,6 +140,8 @@ class GenerationRequest(BaseModel):
     quality: str | None = None
     output_format: Literal["png", "jpg", "webp"] | None = None
     structure_strength: float | None = Field(default=None, ge=0, le=1)
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    steps: int | None = Field(default=None, ge=1, le=20)
 
 
 class UnsafeRemoteUrl(BaseModel):

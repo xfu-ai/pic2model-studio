@@ -42,8 +42,8 @@ type MultiviewRestorePoint = {
   sourceId: string;
   generatedViewIds: Record<Direction, string> | null;
   regions: Record<Direction, SelectionRect>;
-  qualityConfirmed: boolean;
   generationJobId: string | null;
+  multiviewSetId: string | null;
 };
 const imageAssetTypes = new Set([
   "source_image",
@@ -62,22 +62,6 @@ const colors: Record<Direction, string> = {
   side: "#2ea043",
   back: "#d97706",
 };
-const checks = [
-  "主体比例一致",
-  "朝向正确",
-  "关键配件一致",
-  "主体没有截断",
-  "背景适合建模",
-  "分辨率足够",
-];
-const passedQualityChecks = {
-  subject_scale: "passed",
-  direction: "passed",
-  key_accessory: "passed",
-  truncation: "passed",
-  background: "passed",
-  resolution: "passed",
-} as const;
 const DEFAULT_FACE_LIMIT = 50_000;
 const MIN_FACE_LIMIT = 500;
 const MAX_FACE_LIMIT = 1_000_000;
@@ -100,6 +84,19 @@ function isRestoredGeneratedSheet(
       sourceId &&
       directions.every((view) => selected?.[view] === sourceId),
   );
+}
+function restoredConfirmedViews(
+  selected: Record<string, string> | undefined,
+  setId: string | null | undefined,
+): Record<Direction, string> | null {
+  const sourceId = selected?.source;
+  if (!setId || !sourceId || !directions.every((view) => selected?.[view])) {
+    return null;
+  }
+  if (directions.every((view) => selected?.[view] === sourceId)) return null;
+  return Object.fromEntries(
+    directions.map((view) => [view, selected![view]]),
+  ) as Record<Direction, string>;
 }
 function requestId() {
   return crypto.randomUUID();
@@ -161,10 +158,17 @@ export function MultiviewWorkspace({
     workflowContext?.selected,
     workflowContext?.job_id,
   );
+  const restoredConfirmed = restoredConfirmedViews(
+    workflowContext?.selected,
+    workflowContext?.set_id,
+  );
   const [assets, setAssets] = useState<AssetDto[]>([]);
   const [sourceId, setSourceId] = useState(persistedSourceId ?? "");
   const [generatedViewIds, setGeneratedViewIds] =
-    useState<Record<Direction, string> | null>(null);
+    useState<Record<Direction, string> | null>(restoredConfirmed);
+  const [multiviewSetId, setMultiviewSetId] = useState<string | null>(
+    workflowContext?.set_id ?? null,
+  );
   const [generatedViewUrls, setGeneratedViewUrls] = useState<
     Partial<Record<Direction, string>>
   >({});
@@ -188,9 +192,6 @@ export function MultiviewWorkspace({
   const [prompt, setPrompt] = useState("");
   const [url, setUrl] = useState("");
   const [cropPreviews, setCropPreviews] = useState<Partial<Record<Direction, string>>>({});
-  const [qualityConfirmed, setQualityConfirmed] = useState(
-    workflowContext?.quality_confirmed ?? false,
-  );
   const [faceLimit, setFaceLimit] = useState(
     modelWorkflowContext?.target_triangles ?? DEFAULT_FACE_LIMIT,
   );
@@ -208,7 +209,9 @@ export function MultiviewWorkspace({
   const image = useRef<HTMLImageElement>(null);
   const operation = useRef<RegionEditOperation | null>(null);
   const consumedGenerationJob = useRef<string | null>(
-    restoredGeneratedSheet ? (workflowContext?.job_id ?? null) : null,
+    restoredGeneratedSheet || restoredConfirmed
+      ? (workflowContext?.job_id ?? null)
+      : null,
   );
   const source = assets.find((asset) => asset.id === sourceId);
   const applyGeneratedSheet = useCallback(
@@ -232,9 +235,9 @@ export function MultiviewWorkspace({
       setSourceCleared(false);
       setSourceId(sheet.id);
       setGeneratedViewIds(null);
+      setMultiviewSetId(null);
       setRegions(defaultRegions(sheet));
       setActive("front");
-      setQualityConfirmed(false);
       setMessage(
         automatic
           ? "三视图拼图生成完成，已自动加载；请调整三个框后裁切。"
@@ -248,10 +251,10 @@ export function MultiviewWorkspace({
     setSourceCleared(false);
     setSourceId(asset.id);
     setRegions(defaultRegions(asset));
-    setQualityConfirmed(false);
     setApprovalId(null);
     setModelApproval(null);
     setGeneratedViewIds(null);
+    setMultiviewSetId(null);
     setGenerationJobId(null);
     consumedGenerationJob.current = null;
   };
@@ -259,8 +262,8 @@ export function MultiviewWorkspace({
     sourceId,
     generatedViewIds,
     regions,
-    qualityConfirmed,
     generationJobId,
+    multiviewSetId,
   });
   const selectSource = (asset: AssetDto) => {
     setRestorePoint(snapshotSource());
@@ -311,8 +314,8 @@ export function MultiviewWorkspace({
     setSourceId(restorePoint.sourceId);
     setGeneratedViewIds(restorePoint.generatedViewIds);
     setRegions(restorePoint.regions);
-    setQualityConfirmed(restorePoint.qualityConfirmed);
     setGenerationJobId(restorePoint.generationJobId);
+    setMultiviewSetId(restorePoint.multiviewSetId);
     consumedGenerationJob.current = restorePoint.generatedViewIds
       ? restorePoint.generationJobId
       : null;
@@ -326,11 +329,11 @@ export function MultiviewWorkspace({
     setSourceId("");
     setUrl("");
     setRegions(defaultRegions());
-    setQualityConfirmed(false);
     setApprovalId(null);
     setModelApproval(null);
     setGeneratedViewIds(null);
     setGeneratedViewUrls({});
+    setMultiviewSetId(null);
     setGenerationJobId(null);
     consumedGenerationJob.current = null;
     setMessage("已清空当前三视图制作页的来源；项目资产不会被删除。");
@@ -554,10 +557,61 @@ export function MultiviewWorkspace({
     };
   }, [api, applyGeneratedSheet, generationJobId, projectId]);
   useEffect(() => {
-    if (!url) { setCropPreviews({}); return; }
-    const sourceImage = new Image(); let active = true;
-    sourceImage.onload = () => { if (!active) return; const next: Partial<Record<Direction, string>> = {}; directions.forEach((view) => { const rect = regions[view]; const canvas = document.createElement("canvas"); canvas.width = Math.max(1, rect.width); canvas.height = Math.max(1, rect.height); canvas.getContext("2d")?.drawImage(sourceImage, rect.x, rect.y, rect.width, rect.height, 0, 0, canvas.width, canvas.height); next[view] = canvas.toDataURL("image/jpeg", .9); }); setCropPreviews(next); };
-    sourceImage.src = url; return () => { active = false; };
+    if (!url) {
+      setCropPreviews({});
+      return;
+    }
+    const sourceImage = new Image();
+    const objectUrls: string[] = [];
+    let active = true;
+    sourceImage.onload = () => {
+      void Promise.all(
+        directions.map((view) => new Promise<readonly [Direction, string]>((resolve) => {
+          const rect = regions[view];
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, rect.width);
+          canvas.height = Math.max(1, rect.height);
+          canvas.getContext("2d")?.drawImage(
+            sourceImage,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          );
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              resolve([view, ""] as const);
+              return;
+            }
+            const objectUrl = URL.createObjectURL(blob);
+            if (!active) {
+              URL.revokeObjectURL(objectUrl);
+              resolve([view, ""] as const);
+              return;
+            }
+            objectUrls.push(objectUrl);
+            resolve([view, objectUrl] as const);
+          }, "image/jpeg", 0.9);
+        })),
+      ).then((entries) => {
+        if (!active) return;
+        setCropPreviews(Object.fromEntries(
+          entries.filter(([, previewUrl]) => Boolean(previewUrl)),
+        ) as Partial<Record<Direction, string>>);
+      });
+    };
+    sourceImage.onerror = () => {
+      if (active) setCropPreviews({});
+    };
+    sourceImage.src = url;
+    return () => {
+      active = false;
+      objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
+    };
   }, [regions, url]);
   useEffect(() => {
     if (!sourceReady) return;
@@ -570,8 +624,8 @@ export function MultiviewWorkspace({
       selected,
       regions,
       checks: {},
-      quality_confirmed: qualityConfirmed,
-      set_id: null,
+      quality_confirmed: false,
+      set_id: multiviewSetId,
       job_id: generationJobId,
     };
     if (workflowContext && JSON.stringify(workflowContext) === JSON.stringify(next)) return;
@@ -579,8 +633,8 @@ export function MultiviewWorkspace({
   }, [
     generatedViewIds,
     generationJobId,
+    multiviewSetId,
     onWorkflowContextChange,
-    qualityConfirmed,
     regions,
     sourceReady,
     sourceId,
@@ -708,7 +762,6 @@ export function MultiviewWorkspace({
         [view]: { x: next.x, y: next.y, width: 1, height: 1 },
       }));
     }
-    setQualityConfirmed(false);
   };
   const continueRegionEdit = (event: PointerEvent<HTMLDivElement>) => {
     const next = point(event);
@@ -863,63 +916,77 @@ export function MultiviewWorkspace({
       setBusy(false);
     }
   };
-  const submit3d = async () => {
-    if ((!source && !generatedViewIds) || !qualityConfirmed) return;
+  const confirmCropRegions = async () => {
+    if (!source || generatedViewIds) return;
     setBusy(true);
     try {
-      const selectedViews = generatedViewIds ?? {
-        front: source!.id,
-        side: source!.id,
-        back: source!.id,
-      };
       const set = await api.createMultiviewSet(
         projectId,
-        source?.id ?? selectedViews.front,
-        selectedViews,
+        source.id,
+        { front: source.id, side: source.id, back: source.id },
         requestId(),
       );
-      if (!generatedViewIds) {
-        const savedRegions = await api.invokeTool(
-          projectId,
-          "multiview.set_regions",
-          { multiview_set_id: set.id, regions },
-          requestId(),
-        );
-        if (!savedRegions.ok) throw new Error(savedRegions.error?.user_message ?? "无法保存三视图裁切框。");
-      }
-      let viewAssetIds = selectedViews;
-      if (!generatedViewIds) {
-        const crops = await api.invokeTool(
-          projectId,
-          "multiview.crop_views",
-          { multiview_set_id: set.id },
-          requestId(),
-        );
-        if (!crops.ok || crops.output_asset_ids.length !== 3) throw new Error(crops.error?.user_message ?? "三视图裁切失败，请重新检查三个框。");
-        viewAssetIds = Object.fromEntries(
-          directions.map((view, index) => [
-            view,
-            crops.output_asset_ids[index],
-          ]),
-        ) as Record<Direction, string>;
-      }
-      const quality = await api.invokeTool(
+      const savedRegions = await api.invokeTool(
         projectId,
-        "multiview.set_quality_checks",
-        { multiview_set_id: set.id, checks: passedQualityChecks },
+        "multiview.set_regions",
+        { multiview_set_id: set.id, regions },
         requestId(),
       );
-      if (!quality.ok)
+      if (!savedRegions.ok) {
         throw new Error(
-          quality.error?.user_message ?? "无法保存三视图质量确认。",
+          savedRegions.error?.user_message ?? "无法保存三视图裁切框。",
         );
+      }
+      const crops = await api.invokeTool(
+        projectId,
+        "multiview.crop_views",
+        { multiview_set_id: set.id },
+        requestId(),
+      );
+      if (!crops.ok || crops.output_asset_ids.length !== 3) {
+        throw new Error(
+          crops.error?.user_message ?? "三视图裁切失败，请重新检查三个框。",
+        );
+      }
+      const viewAssetIds = Object.fromEntries(
+        directions.map((view, index) => [view, crops.output_asset_ids[index]]),
+      ) as Record<Direction, string>;
+      setGeneratedViewIds(viewAssetIds);
+      setMultiviewSetId(set.id);
+      setMessage("裁切框已确认，正、侧、背三张受管图片已生成；可以直接进入 3D 模型处理。");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "无法确认三视图裁切框。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reopenCropRegions = () => {
+    setGeneratedViewIds(null);
+    setMultiviewSetId(null);
+    setModelApproval(null);
+    setMessage("裁切框已重新进入编辑状态；再次确认前，旧裁切结果不会用于建模。");
+  };
+  const submit3d = async () => {
+    if (!generatedViewIds) return;
+    setBusy(true);
+    try {
+      const set = multiviewSetId
+        ? { id: multiviewSetId }
+        : await api.createMultiviewSet(
+            projectId,
+            source?.id ?? generatedViewIds.front,
+            generatedViewIds,
+            requestId(),
+          );
       const result = await api.invokeTool(
         projectId,
         "model3d.generate",
         {
           mode: "multiview",
           multiview_set_id: set.id,
-          view_asset_ids: viewAssetIds,
+          view_asset_ids: generatedViewIds,
           provider_profile: "tripo3d/default",
           model: "v3.1-20260211",
           parameters: { model_version: "v3.1-20260211", texture: true, pbr: true, face_limit: faceLimit, auto_size: true, orientation: "align_image" },
@@ -939,10 +1006,7 @@ export function MultiviewWorkspace({
       setBusy(false);
     }
   };
-  const valid = useMemo(
-    () => Boolean((source || generatedViewIds) && qualityConfirmed),
-    [generatedViewIds, qualityConfirmed, source],
-  );
+  const valid = useMemo(() => Boolean(generatedViewIds), [generatedViewIds]);
   return (
     <section className="multiview-workspace" aria-labelledby="multiview-title">
       <header className="multiview-header">
@@ -1155,7 +1219,7 @@ export function MultiviewWorkspace({
           <h2>③ 输出与建模</h2>
           <p>
             {generatedViewIds
-              ? "AI 返回的三个独立受管结果会直接用于建模，不再从单张图片重复裁切。"
+              ? "已确认的三个独立受管结果会直接用于建模，不再从单张图片重复裁切。"
               : "三个框会按原图坐标裁切为受管副本，原图不会被改写。"}
           </p>
           {directions.map((view) => (
@@ -1169,6 +1233,25 @@ export function MultiviewWorkspace({
               </span>
             </div>
           ))}
+          {generatedViewIds ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={reopenCropRegions}
+            >
+              重新调整裁切框
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="primary multiview-confirm-crops"
+              disabled={!source || busy}
+              onClick={() => void confirmCropRegions()}
+            >
+              <CheckCircle size={18} />
+              确认裁切框并生成三张视图
+            </button>
+          )}
           <section className="multiview-model-settings" aria-labelledby="multiview-face-limit-title">
             <div className="multiview-model-settings-heading">
               <strong id="multiview-face-limit-title">生成目标面数</strong>
@@ -1208,30 +1291,13 @@ export function MultiviewWorkspace({
               Tripo 的 face_limit 是生成目标上限，实际结果可能略有差异；最低建议 500。
             </small>
           </section>
-          <fieldset className="multiview-quality">
-            <legend>人工质量检查</legend>
-            {checks.map((check) => (
-              <label key={check}>
-                <CheckCircle size={15} />
-                {check}
-              </label>
-            ))}
-            <label className="multiview-confirm">
-              <input
-                type="checkbox"
-                checked={qualityConfirmed}
-                onChange={(event) => setQualityConfirmed(event.target.checked)}
-              />
-              我已确认三张视图与质量
-            </label>
-          </fieldset>
           <button
             className="primary multiview-submit"
             disabled={!valid || busy}
             onClick={() => void submit3d()}
           >
             <DownloadSimple size={18} />
-            确认三视图并进入 3D 模型处理
+            确认裁切并进入 3D 模型处理
           </button>
         </aside>
       </div>

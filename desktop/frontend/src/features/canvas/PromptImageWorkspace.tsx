@@ -125,6 +125,20 @@ export function PromptImageWorkspace({ projectId, api, host = new HostClient(), 
   const [rewriteNotice, setRewriteNotice] = useState<string | null>(null);
   const [pendingRewrite, setPendingRewrite] = useState<RewriteCandidate | null>(null);
   const editRevision = useRef(0);
+  // A rewrite creates a newer managed Prompt, while the reference context
+  // still points at the Prompt from which it began.  Remember that the older
+  // reference has already been consumed so it cannot overwrite the rewrite
+  // on every workflow-state update.
+  const restoredMergedPromptAssetId = useRef<string | null>(null);
+  const sourcePromptAssetIdRef = useRef(sourcePromptAssetId);
+  sourcePromptAssetIdRef.current = sourcePromptAssetId;
+
+  useEffect(() => {
+    const persistedRewriteJobId = workflowContext?.rewrite_job_id ?? null;
+    if (persistedRewriteJobId && persistedRewriteJobId !== rewriteJobId) {
+      setRewriteJobId(persistedRewriteJobId);
+    }
+  }, [rewriteJobId, workflowContext?.rewrite_job_id]);
   const rewriteSnapshot = useRef<{ revision: number; language: PromptLanguage } | null>(null);
   const prompt = prompts[displayLanguage];
   const rewriteBusy = rewritePreparing || Boolean(rewriteJobId);
@@ -164,16 +178,32 @@ export function PromptImageWorkspace({ projectId, api, host = new HostClient(), 
   }, [aspectRatio, candidateCount, displayLanguage, generationJobId, onWorkflowContextChange, prompts.en, prompts.zh, rewriteJobId, selectedCandidateId, sourcePromptAssetId, workflowContext]);
 
   useEffect(() => {
-    if (!mergedPromptAssetId || mergedPromptAssetId === sourcePromptAssetId) return;
+    if (
+      !mergedPromptAssetId
+      || restoredMergedPromptAssetId.current === mergedPromptAssetId
+    ) return;
+    if (mergedPromptAssetId === sourcePromptAssetId && (prompts.zh || prompts.en)) {
+      restoredMergedPromptAssetId.current = mergedPromptAssetId;
+      return;
+    }
+    const sourceAtRequest = sourcePromptAssetId;
     let active = true;
     void api.assetText(projectId, mergedPromptAssetId)
       .then((text) => {
         if (!active) return;
+        if (restoredMergedPromptAssetId.current === mergedPromptAssetId) return;
+        // A local rewrite or user-confirmed Prompt became authoritative while
+        // this older managed Prompt was loading.  Its delayed response must
+        // not replace the newer text.
+        if (
+          sourcePromptAssetIdRef.current !== sourceAtRequest
+          && sourcePromptAssetIdRef.current !== mergedPromptAssetId
+        ) return;
         const restored = promptsFromManagedText(text);
         if (restored.zh || restored.en) {
           editRevision.current += 1;
+          restoredMergedPromptAssetId.current = mergedPromptAssetId;
           setPrompts(restored);
-          setDisplayLanguage("zh");
           setPromptDirty(false);
           setSourcePromptAssetId(mergedPromptAssetId);
           setPendingRewrite(null);
@@ -181,7 +211,7 @@ export function PromptImageWorkspace({ projectId, api, host = new HostClient(), 
       })
       .catch(() => { if (active) setError("合并 Prompt 无法读取；请返回参考图页面重新保存。"); });
     return () => { active = false; };
-  }, [api, mergedPromptAssetId, projectId, sourcePromptAssetId]);
+  }, [api, mergedPromptAssetId, projectId, prompts.en, prompts.zh, sourcePromptAssetId]);
 
   useEffect(() => {
     if (!generationJobId) {
@@ -240,6 +270,7 @@ export function PromptImageWorkspace({ projectId, api, host = new HostClient(), 
           } else {
             setPrompts(candidate.prompts);
             setDisplayLanguage(candidate.language);
+            restoredMergedPromptAssetId.current = mergedPromptAssetId ?? null;
             setSourcePromptAssetId(candidate.assetId);
             setPromptDirty(false);
             setPendingRewrite(null);
@@ -272,7 +303,7 @@ export function PromptImageWorkspace({ projectId, api, host = new HostClient(), 
       active = false;
       window.clearInterval(timer);
     };
-  }, [api, displayLanguage, projectId, rewriteJobId]);
+  }, [api, displayLanguage, mergedPromptAssetId, projectId, rewriteJobId]);
 
   const editPrompt = (value: string) => {
     editRevision.current += 1;
@@ -301,6 +332,7 @@ export function PromptImageWorkspace({ projectId, api, host = new HostClient(), 
     editRevision.current += 1;
     setPrompts(candidate.prompts);
     setDisplayLanguage(candidate.language);
+    restoredMergedPromptAssetId.current = mergedPromptAssetId ?? null;
     setSourcePromptAssetId(candidate.assetId);
     setPromptDirty(false);
     setPendingRewrite(null);

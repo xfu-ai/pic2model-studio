@@ -85,6 +85,7 @@ B02_TOOLS: tuple[tuple[str, RiskLevel, str, bool, str | None], ...] = (
     ("image.analyze_content", RiskLevel.EXTERNAL, "job", False, "vision"),
     ("image.analyze_style", RiskLevel.EXTERNAL, "job", False, "vision"),
     ("image.evaluate_3d_suitability", RiskLevel.EXTERNAL, "job", False, "vision"),
+    ("image.understand_for_agent", RiskLevel.EXTERNAL, "sync", False, "vision"),
     ("prompt.extract_bilingual", RiskLevel.LOCAL_REVERSIBLE, "sync", False, None),
     ("prompt.merge", RiskLevel.LOCAL_REVERSIBLE, "sync", False, None),
     ("prompt.get_current", RiskLevel.READ_ONLY, "sync", False, None),
@@ -189,6 +190,14 @@ def _input_schema(name: str) -> dict[str, Any]:
         )
     if name == "image.evaluate_3d_suitability":
         return _schema(analysis, ("asset_id", "provider_profile", "model"))
+    if name == "image.understand_for_agent":
+        return _schema(
+            {
+                **analysis,
+                "question": {"type": "string", "minLength": 1, "maxLength": 4000},
+            },
+            ("asset_id", "provider_profile", "model", "question"),
+        )
     if name == "prompt.extract_bilingual":
         return _schema(
             {"analysis_asset_id": _ASSET, "kind": {"enum": ["content", "style"]}},
@@ -213,7 +222,12 @@ def _input_schema(name: str) -> dict[str, Any]:
         )
     if name == "image.generate":
         return _schema(
-            {**generation, "channel": {"enum": ["auto", "meshy"]}},
+            {
+                **generation,
+                "channel": {"enum": ["auto", "tripo", "meshy", "z_image"]},
+                "seed": {"type": "integer", "minimum": 0, "maximum": 2_147_483_647},
+                "steps": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
             ("prompt_asset_id", "provider_profile", "channel", "model", "candidate_count"),
         )
     if name in {"image.transform", "image.generate_variants"}:

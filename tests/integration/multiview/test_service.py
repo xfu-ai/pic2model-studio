@@ -17,7 +17,7 @@ def _png(colour: str) -> str:
     return base64.b64encode(output.getvalue()).decode("ascii")
 
 
-def test_three_view_regions_crops_and_quality_gate_are_persistent(tmp_path) -> None:
+def test_three_view_regions_and_confirmed_crops_are_persistent(tmp_path) -> None:
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
     root = tmp_path / "project"
     project = dependencies.projects.create(root, "Multiview")
@@ -40,6 +40,9 @@ def test_three_view_regions_crops_and_quality_gate_are_persistent(tmp_path) -> N
     cropped = service.crop_confirmed_views(root, project.id, set_id=set_id, request_id="crop")
     assert set(cropped) == {"front", "side", "back"}
     assert all(cropped[view] != original[view] for view in cropped)
+    assert repository.is_ready_for_submission(
+        root / "project.sqlite3", set_id=set_id, members=cropped
+    )
     report = service.validate(
         root,
         set_id=set_id,
@@ -55,7 +58,7 @@ def test_three_view_regions_crops_and_quality_gate_are_persistent(tmp_path) -> N
     assert report.can_continue
 
 
-def test_manual_quality_confirmation_persists_and_is_invalidated_by_view_changes(tmp_path) -> None:
+def test_optional_quality_review_does_not_replace_crop_confirmation(tmp_path) -> None:
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
     root = tmp_path / "project"
     project = dependencies.projects.create(root, "Manual quality")
@@ -103,6 +106,13 @@ def test_manual_quality_confirmation_persists_and_is_invalidated_by_view_changes
     )
     assert confirmed.status == "succeeded"
     members = repository.current_assets(root / "project.sqlite3", set_id)
+    assert not repository.is_ready_for_submission(
+        root / "project.sqlite3", set_id=set_id, members=members
+    )
+    service.confirm_regions(root, project.id, set_id=set_id, request_id="confirm-regions")
+    members = service.crop_confirmed_views(
+        root, project.id, set_id=set_id, request_id="confirm-crops"
+    )
     assert repository.is_ready_for_submission(
         root / "project.sqlite3", set_id=set_id, members=members
     )

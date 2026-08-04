@@ -5,7 +5,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+from .agent.providers.deepseek import (
+    DEEPSEEK_DEFAULT_MODEL,
+    DEEPSEEK_PROFILE_REF,
+    create_deepseek_credential_resolver,
+)
 from .api.dependencies import AppDependencies
+from .application.agent_image_understanding import AgentImageUnderstandingService
 from .application.app_state import AppStateService
 from .application.archive_import import ProjectPackageService
 from .application.assets import AssetService
@@ -14,13 +20,14 @@ from .application.b02_tool_catalog import register_b02_tools
 from .application.candidate_service import CandidateService
 from .application.diagnostics import DiagnosticsService
 from .application.events import EventService
+from .application.generation_policy import GenerationPolicyResolver
 from .application.host_capabilities import HostCapabilityStore
+from .application.image_processing import ImageProcessingService
 from .application.image_provider_routing import (
     CredentialProbeRoute,
     ImageProviderRoute,
     PrioritizedImageGenerationProvider,
 )
-from .application.image_processing import ImageProcessingService
 from .application.jobs.configured_tripo import ConfiguredTripoJobHandler
 from .application.jobs.external_image_handler import ExternalImageJobHandler
 from .application.jobs.local_image_handler import LocalImageJobHandler
@@ -32,7 +39,15 @@ from .application.jobs.model_conversion import (
 )
 from .application.jobs.recovery_service import JobRecoveryService
 from .application.jobs.runner import BackgroundJobRunner
+from .application.jobs.triposr_handler import (
+    LocalTripoSRJobHandler,
+    Model3DGenerationJobRouter,
+)
 from .application.jobs.worker import ProductionJobWorker
+from .application.jobs.z_image_handler import (
+    ImageGenerationJobRouter,
+    LocalZImageJobHandler,
+)
 from .application.local_image_processing import LocalImageProcessingService
 from .application.local_tool_dispatch import LocalToolDispatcher
 from .application.model_assets import ModelAssetService
@@ -54,11 +69,18 @@ from .application.selections import SelectionService
 from .application.settings import SettingsService
 from .application.tool_catalog import register_b01_tools
 from .application.tools import ToolRegistry
+from .domain.local_inference import default_local_provider_profiles
 from .infrastructure.converters.controlled import (
     ApprovedConverterSettings,
     default_conversion_backends,
 )
 from .infrastructure.keyring_store import OSKeyringStore
+from .infrastructure.local_inference import (
+    CapabilityLocalProbe,
+    LocalInferenceGate,
+    LocalProviderMonitor,
+    OllamaOpenAIProbe,
+)
 from .infrastructure.model_optimization import FastSimplificationGlbOptimizer
 from .infrastructure.providers.config import (
     GEMINI_PROFILE,
@@ -83,8 +105,9 @@ from .infrastructure.providers.credential_probe import (
 )
 from .infrastructure.providers.gemini import GeminiVisionProvider
 from .infrastructure.providers.meshy_image import MeshyTextToImageProvider
-from .infrastructure.providers.tripo_image import TripoTextToImageProvider
 from .infrastructure.providers.tripo_http import TripoHttpSettings
+from .infrastructure.providers.tripo_image import TripoTextToImageProvider
+from .infrastructure.providers.z_image_turbo import ZImageTurboProvider
 from .infrastructure.runtime import InfrastructureRuntime
 from .infrastructure.sqlite.approval_repository import SqliteApprovalRepository
 from .infrastructure.sqlite.candidate_repository import CandidateRepository
@@ -102,10 +125,22 @@ from .infrastructure.sqlite.repositories import (
     SqliteAppStateRepository,
     ToolRepository,
 )
-from .agent.providers.deepseek import (
-    DEEPSEEK_DEFAULT_MODEL,
-    DEEPSEEK_PROFILE_REF,
-    create_deepseek_credential_resolver,
+from .infrastructure.stable_diffusion_cpp import (
+    STABLE_DIFFUSION_CPP_CAPABILITY,
+    Z_IMAGE_DIFFUSION_CAPABILITY,
+    Z_IMAGE_LLM_CAPABILITY,
+    Z_IMAGE_VAE_CAPABILITY,
+    StableDiffusionCppRunner,
+    ZImageRuntimeConfig,
+    resolve_environment_local_capability,
+)
+from .infrastructure.triposr_worker import (
+    TRIPOSR_MODEL_CAPABILITY,
+    TRIPOSR_RUNNER_CAPABILITY,
+    TRIPOSR_WORKER_CAPABILITY,
+    TripoSRRuntimeConfig,
+    TripoSRWorkerRunner,
+    resolve_environment_triposr_capability,
 )
 
 
@@ -142,13 +177,6 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
         model_assets,
     )
     optimization = ModelOptimizationService(assets, FastSimplificationGlbOptimizer())
-    b02_runtime = PersistentB02ToolRuntime(
-        jobs,
-        approvals,
-        local_dispatcher,
-        local_capability=lambda name: name != "model3d.optimize" or optimization.capability().available,
-    )
-    register_b02_tools(registry, b02_runtime)
     def configured_conversion_backends():
         # Read at conversion time so saving Settings takes effect for the next
         # job; no sidecar restart and no untrusted Tool argument is involved.
@@ -181,6 +209,27 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
             resolved_gemini_settings,
             credentials.callback(GEMINI_PROFILE),
         )
+    )
+    agent_image_understanding = AgentImageUnderstandingService(assets, gemini_vision)
+
+    def sync_dispatcher(
+        name: str,
+        root: Path,
+        project_id: str,
+        arguments: dict[str, object],
+        call_id: str,
+    ):
+        if name == "image.understand_for_agent":
+            return agent_image_understanding.understand(
+                root, project_id, arguments, call_id
+            )
+        return local_dispatcher(name, root, project_id, arguments, call_id)
+
+    b02_runtime = PersistentB02ToolRuntime(
+        jobs,
+        approvals,
+        sync_dispatcher,
+        local_capability=lambda name: name != "model3d.optimize" or optimization.capability().available,
     )
     meshy_settings = MeshyImageSettings(
         base_url=os.environ.get("MESHY_BASE_URL", "https://api.meshy.ai"),
@@ -298,16 +347,29 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
             ),
         ],
     )
+    candidates = CandidateService(assets, CandidateRepository())
     image_handler = ExternalImageJobHandler(
         jobs,
         assets,
         selections,
         multiview,
         multiview_repository,
-        CandidateService(assets, CandidateRepository()),
+        candidates,
         prompt_versions,
         gemini_vision,
         image_provider,
+    )
+    local_inference_gate = LocalInferenceGate()
+    z_image_runner = StableDiffusionCppRunner(
+        resolve_environment_local_capability,
+        gate=local_inference_gate,
+    )
+    z_image_provider = ZImageTurboProvider(z_image_runner)
+    z_image_handler = LocalZImageJobHandler(
+        jobs,
+        assets,
+        candidates,
+        z_image_provider,
     )
     tripo_handler = ConfiguredTripoJobHandler(
         jobs,
@@ -322,6 +384,59 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
         ),
         transfer_factory=ControlledE2EFileTransferProvider if controlled_e2e else None,
     )
+    triposr_runner = TripoSRWorkerRunner(
+        resolve_environment_triposr_capability,
+        gate=local_inference_gate,
+    )
+    triposr_handler = LocalTripoSRJobHandler(
+        jobs,
+        assets,
+        model_assets,
+        triposr_runner,
+    )
+    profiles = default_local_provider_profiles()
+    z_image_config = ZImageRuntimeConfig()
+    triposr_config = TripoSRRuntimeConfig()
+
+    def z_image_status(_capability_id: str):
+        runtime = resolve_environment_local_capability(STABLE_DIFFUSION_CPP_CAPABILITY)
+        models = [
+            resolve_environment_local_capability(Z_IMAGE_DIFFUSION_CAPABILITY),
+            resolve_environment_local_capability(Z_IMAGE_VAE_CAPABILITY),
+            resolve_environment_local_capability(Z_IMAGE_LLM_CAPABILITY),
+        ]
+        return {
+            "configured": runtime is not None,
+            "available": z_image_runner.probe(z_image_config),
+            "model_present": all(item is not None for item in models),
+        }
+
+    def triposr_status(_capability_id: str):
+        runtime = resolve_environment_triposr_capability(TRIPOSR_WORKER_CAPABILITY)
+        runner = resolve_environment_triposr_capability(TRIPOSR_RUNNER_CAPABILITY)
+        model = resolve_environment_triposr_capability(TRIPOSR_MODEL_CAPABILITY)
+        return {
+            "configured": runtime is not None and runner is not None,
+            "available": triposr_runner.probe(triposr_config),
+            "model_present": model is not None,
+        }
+
+    local_provider_monitor = LocalProviderMonitor(
+        profiles,
+        {
+            profiles[0].profile_id: OllamaOpenAIProbe(),
+            profiles[1].profile_id: CapabilityLocalProbe(z_image_status),
+            profiles[2].profile_id: CapabilityLocalProbe(triposr_status),
+        },
+    )
+    registry.set_request_policy(
+        GenerationPolicyResolver(
+            lambda: SettingsRepository().get_app(app_db),
+            local_provider_monitor,
+            image_provider,
+        )
+    )
+    register_b02_tools(registry, b02_runtime)
     handlers: dict[str, Callable[..., object]] = {
         name: local_model_handler
         for name in (
@@ -341,7 +456,6 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
                 "image.analyze_style",
                 "image.evaluate_3d_suitability",
                 "prompt.rewrite",
-                "image.generate",
                 "image.transform",
                 "image.generate_variants",
                 "image.upscale",
@@ -357,7 +471,14 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
             )
         }
     )
-    handlers["model3d.generate"] = tripo_handler.run
+    handlers["image.generate"] = ImageGenerationJobRouter(
+        z_image_handler,
+        image_handler.run,
+    )
+    handlers["model3d.generate"] = Model3DGenerationJobRouter(
+        triposr_handler,
+        tripo_handler.run,
+    )
     handlers["model3d.download"] = tripo_handler.run
     job_worker = ProductionJobWorker(jobs, handlers)
     roots: dict[str, Path] = {}
@@ -388,4 +509,5 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
         roots=roots,
         job_runner=job_runner,
         image_provider_monitor=image_provider,
+        local_provider_monitor=local_provider_monitor,
     )

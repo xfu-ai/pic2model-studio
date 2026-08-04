@@ -49,6 +49,7 @@ class AppDependencies:
     roots: dict[str, Path] = field(default_factory=dict)
     job_runner: BackgroundJobRunner | None = None
     image_provider_monitor: Any | None = None
+    local_provider_monitor: Any | None = None
 
     def root_for(self, project_id: str) -> Path:
         root = self.roots.get(project_id)

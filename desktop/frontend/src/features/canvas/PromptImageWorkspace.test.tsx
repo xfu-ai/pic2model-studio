@@ -117,6 +117,33 @@ describe("PromptImageWorkspace", () => {
     expect(screen.getByRole("textbox")).toHaveValue("product concept on a white background, prominent subject, natural lighting");
   });
 
+  it("applies a persisted Agent rewrite Job without treating it as image generation", async () => {
+    const api = {
+      job: vi.fn().mockResolvedValue({
+        id: "agent-rewrite-job",
+        status: "succeeded",
+        stage: "completed",
+        output_asset_ids: ["agent-rewritten-prompt"],
+      }),
+      assetText: vi.fn().mockResolvedValue(rewrittenPrompt),
+    };
+    const workflowContext = {
+      zh_prompt: "",
+      en_prompt: "",
+      display_language: "zh" as const,
+      source_prompt_asset_id: null,
+      candidate_count: 2,
+      aspect_ratio: "1:1",
+      selected_candidate_id: null,
+      job_id: null,
+      rewrite_job_id: "agent-rewrite-job",
+    };
+    render(<PromptImageWorkspace projectId="project-1" api={api as never} onModeChange={vi.fn()} workflowContext={workflowContext} onWorkflowContextChange={vi.fn()} />);
+    expect(await screen.findByDisplayValue("白色背景中的产品概念图，主体突出，光影自然")).toBeVisible();
+    expect(api.job).toHaveBeenCalledWith("project-1", "agent-rewrite-job");
+    expect(api.assetText).toHaveBeenCalledWith("project-1", "agent-rewritten-prompt");
+  });
+
   it("prefills the input from the merged managed prompt and submits a directly queued generation", async () => {
     const api = {
       assetText: vi.fn().mockResolvedValue(managedPrompt),
@@ -207,6 +234,33 @@ describe("PromptImageWorkspace", () => {
         source_prompt_asset_id: "new-merged-prompt",
       }),
     ));
+  });
+
+  it("preserves the selected language while loading a newly handed-off managed Prompt", async () => {
+    const api = {
+      assetText: vi.fn().mockResolvedValue(managedPrompt),
+      job: vi.fn(),
+    };
+    render(<PromptImageWorkspace
+      projectId="project-1"
+      api={api as never}
+      onModeChange={vi.fn()}
+      mergedPromptAssetId="new-merged-prompt"
+      workflowContext={{
+        zh_prompt: "旧中文 Prompt",
+        en_prompt: "old English prompt",
+        display_language: "en",
+        source_prompt_asset_id: "old-merged-prompt",
+        candidate_count: 2,
+        aspect_ratio: "1:1",
+        selected_candidate_id: null,
+        job_id: null,
+        rewrite_job_id: null,
+      }}
+    />);
+
+    expect(await screen.findByDisplayValue("a silver knight before a castle in rain")).toBeVisible();
+    expect(screen.getByRole("button", { name: "English" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("preserves edits when reopening the same merged Prompt asset", () => {

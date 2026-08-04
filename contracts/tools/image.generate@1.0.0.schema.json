@@ -18,7 +18,9 @@
       "channel": {
         "enum": [
           "auto",
-          "meshy"
+          "tripo",
+          "meshy",
+          "z_image"
         ]
       },
       "model": {
@@ -43,8 +45,18 @@
       "quality": {
         "type": "string"
       },
+      "seed": {
+        "maximum": 2147483647,
+        "minimum": 0,
+        "type": "integer"
+      },
       "size": {
         "type": "string"
+      },
+      "steps": {
+        "maximum": 20,
+        "minimum": 1,
+        "type": "integer"
       },
       "structure_strength": {
         "maximum": 1,

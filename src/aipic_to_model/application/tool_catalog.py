@@ -183,7 +183,13 @@ def _executor(
             project = projects.open(root, force_read_only=True)
             if project.id != project_id or arguments["project_id"] != project_id:
                 raise DomainErrorV1(ErrorCode.PROJECT_NOT_FOUND, "Project does not exist.")
-            return _success(call_id, canonical_json(project.__dict__))
+            workspace_state = json.loads(
+                projects.workspace_state(root, project_id, force_read_only=True)
+            )
+            return _success(
+                call_id,
+                canonical_json({**project.__dict__, "workspace_state": workspace_state}),
+            )
         if name == "project.save_checkpoint":
             event = projects.save_checkpoint(root, project_id, arguments["request_id"])
             return _success(call_id, canonical_json(event))

@@ -12,8 +12,8 @@ function requestId() { return crypto.randomUUID(); }
 
 function generationFailureMessage(job: JobDto) {
   if (job.status === "cancelled") return "3D 生成已取消。";
-  if (job.error?.code === "MULTIVIEW_MANUAL_CONFIRMATION_REQUIRED") {
-    return "3D 生成未开始：最终裁切的三视图尚未完成质量确认。请返回三视图制作页重新确认后提交。";
+  if (["MULTIVIEW_CROP_CONFIRMATION_REQUIRED", "MULTIVIEW_MANUAL_CONFIRMATION_REQUIRED"].includes(job.error?.code ?? "")) {
+    return "3D 生成未开始：尚未确认最终裁切的正、侧、背三张视图。请返回三视图制作页确认裁切后重新提交。";
   }
   if (job.status === "interrupted") {
     return `3D 生成已中断：${job.error?.user_message ?? "请在任务中心查看详情后重试。"}`;

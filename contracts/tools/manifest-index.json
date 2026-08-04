@@ -20,6 +20,12 @@
       "risk_level": "external"
     },
     {
+      "name": "image.understand_for_agent",
+      "version": "1.0.0",
+      "execution": "sync",
+      "risk_level": "external"
+    },
+    {
       "name": "prompt.extract_bilingual",
       "version": "1.0.0",
       "execution": "sync",

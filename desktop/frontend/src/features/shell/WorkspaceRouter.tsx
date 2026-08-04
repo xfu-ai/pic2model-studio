@@ -1,5 +1,5 @@
 import type { ApiClient, WorkflowContexts, WorkspaceMode } from "../../shared/api/client";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { ImportGlbAction } from "../assets/ImportGlbAction";
 import { ImportImageAction } from "../assets/ImportImageAction";
 import { CaptureScreenAction } from "../assets/CaptureScreenAction";
@@ -20,10 +20,34 @@ const labels: Record<WorkspaceMode, { title: string; description: string }> = {
 
 export function WorkspaceRouter({ mode, onRecover, onModeChange, onCurrentAssetChange, onContinueToMultiview, onOpenTasks, onOpenAssets, projectId, api, onImageImported, onGlbImported, referenceContext, onReferenceContextChange, workflowContexts, onWorkflowContextChange, imageGenerationJobId, onImageJobQueued, candidateResult }: { mode: WorkspaceMode; onRecover(): void; onModeChange?(mode: WorkspaceMode): void; onCurrentAssetChange?(): void; onContinueToMultiview?(assetId: string): void; onOpenTasks?(): void; onOpenAssets?(assetId: string): void; projectId?: string; api?: ApiClient; onImageImported?(): void; onGlbImported?(): void; referenceContext?: import("../../shared/api/client").ReferenceContextState; onReferenceContextChange?(patch: Partial<import("../../shared/api/client").ReferenceContextState>): void; workflowContexts?: WorkflowContexts; onWorkflowContextChange?(patch: Partial<WorkflowContexts>): void; imageGenerationJobId?: string | null; onImageJobQueued?(jobId: string): void; candidateResult?: { jobId: string; assetIds: string[] } | null }) {
   const item = labels[mode] ?? labels.error_diagnostics;
-  const patchPromptImage = useCallback((prompt_image: WorkflowContexts["prompt_image"]) => onWorkflowContextChange?.({ prompt_image }), [onWorkflowContextChange]);
+  const patchPromptImage = useCallback((prompt_image: WorkflowContexts["prompt_image"]) => {
+    onWorkflowContextChange?.({ prompt_image });
+    // The accepted rewrite is a new immutable Prompt version.  Keep the
+    // reference context in lockstep so a later Agent/task refresh cannot load
+    // the older pre-rewrite asset back into the editor.
+    if (prompt_image.source_prompt_asset_id) {
+      onReferenceContextChange?.({ merged_prompt_asset_id: prompt_image.source_prompt_asset_id });
+    }
+  }, [onReferenceContextChange, onWorkflowContextChange]);
   const patchTargetExtract = useCallback((target_extract: WorkflowContexts["target_extract"]) => onWorkflowContextChange?.({ target_extract }), [onWorkflowContextChange]);
   const patchMultiview = useCallback((multiview: WorkflowContexts["multiview"]) => onWorkflowContextChange?.({ multiview }), [onWorkflowContextChange]);
   const patchModel3d = useCallback((model3d: WorkflowContexts["model3d"]) => onWorkflowContextChange?.({ model3d }), [onWorkflowContextChange]);
+  useEffect(() => {
+    const prompt = workflowContexts?.prompt_image;
+    const sourcePromptAssetId = prompt?.source_prompt_asset_id;
+    if (
+      !sourcePromptAssetId
+      || (!prompt.zh_prompt.trim() && !prompt.en_prompt.trim())
+      || referenceContext?.merged_prompt_asset_id === sourcePromptAssetId
+    ) return;
+    onReferenceContextChange?.({ merged_prompt_asset_id: sourcePromptAssetId });
+  }, [
+    onReferenceContextChange,
+    referenceContext?.merged_prompt_asset_id,
+    workflowContexts?.prompt_image.en_prompt,
+    workflowContexts?.prompt_image.source_prompt_asset_id,
+    workflowContexts?.prompt_image.zh_prompt,
+  ]);
   if (mode === "prompt_image" && projectId && api) return <PromptImageWorkspace projectId={projectId} api={api} onModeChange={onModeChange ?? (() => undefined)} generationJobId={imageGenerationJobId} mergedPromptAssetId={referenceContext?.merged_prompt_asset_id} workflowContext={workflowContexts?.prompt_image} onWorkflowContextChange={patchPromptImage} onCurrentAssetChange={onCurrentAssetChange} onJobQueued={onImageJobQueued} />;
   if (mode === "image" && projectId && api) return <ImageWorkspace projectId={projectId} api={api} onModeChange={onModeChange ?? (() => undefined)} onModelJobQueued={(generation_job_id) => patchModel3d({ ...(workflowContexts?.model3d ?? DEFAULT_WORKSPACE.workflow_contexts.model3d), generation_job_id })} />;
   if (mode === "compare" && projectId && api) return <CompareWorkspace projectId={projectId} api={api} onModeChange={onModeChange ?? (() => undefined)} onCurrentAssetChange={onCurrentAssetChange} referenceContext={referenceContext} onReferenceContextChange={onReferenceContextChange} onImageJobQueued={onImageJobQueued} />;

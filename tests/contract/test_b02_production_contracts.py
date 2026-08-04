@@ -66,11 +66,12 @@ def test_b02_manifest_index_is_canonical_and_has_no_aliases() -> None:
     entries = payload["tools"]
     names = [item["name"] for item in entries]
     assert payload["schema_version"] == 1
-    assert len(names) == len(set(names)) == 52
+    assert len(names) == len(set(names)) == 53
     assert set(names) == {
         "image.analyze_content",
         "image.analyze_style",
         "image.evaluate_3d_suitability",
+        "image.understand_for_agent",
         "prompt.extract_bilingual",
         "prompt.merge",
         "prompt.get_current",

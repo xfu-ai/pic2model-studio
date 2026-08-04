@@ -17,6 +17,9 @@ ALLOWED_APP_KEYS = {
     "log_retention_days",
     "image_provider_priority",
     "provider_probe_interval_seconds",
+    "agent_model",
+    "image_generation_backend",
+    "model3d_generation_backend",
 }
 ALLOWED_PROJECT_KEYS = {"workspace_preferences", "image_defaults", "provider_overrides"}
 _SENSITIVE_SETTING_KEY = re.compile(
@@ -63,6 +66,7 @@ _PUBLIC_IMAGE_MODELS = {
 }
 
 _IMAGE_PROVIDER_PROFILES = {"tripo3d/default", "meshy/default"}
+_AGENT_MODELS = {"deepseek-v4-flash", "qwen3-vl:8b", "qwen3-vl:4b"}
 
 
 class SecretStore(Protocol):
@@ -154,6 +158,20 @@ def _assert_non_secret_settings_schema(patch: dict[str, Any], scope: str) -> Non
                 raise DomainErrorV1(
                     ErrorCode.SCHEMA_VALIDATION_FAILED,
                     "Image Provider priority must list Tripo and Meshy exactly once.",
+                )
+            if key == "agent_model" and value not in _AGENT_MODELS:
+                raise DomainErrorV1(
+                    ErrorCode.SCHEMA_VALIDATION_FAILED,
+                    "Unsupported Agent model setting.",
+                )
+            if key in {"image_generation_backend", "model3d_generation_backend"} and value not in {
+                "local",
+                "remote",
+                "auto",
+            }:
+                raise DomainErrorV1(
+                    ErrorCode.SCHEMA_VALIDATION_FAILED,
+                    "Generation backend must be local, remote, or auto.",
                 )
             if key == "provider_profiles":
                 for profile in _assert_keys(

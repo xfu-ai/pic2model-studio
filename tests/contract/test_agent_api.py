@@ -1,10 +1,14 @@
+import base64
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from aipic_to_model.agent.core.errors import ProviderError
 from aipic_to_model.agent.core.models import (
     AssistantMessage,
+    ImageContent,
     ProviderEvent,
     ProviderEventType,
     TextContent,
@@ -45,8 +49,14 @@ def test_agent_system_prompt_has_a_non_optional_final_response_contract() -> Non
     assert "terminal finish_reason" in prompt
     assert "always send a concise, user-facing final summary" in prompt
     assert "Never end a turn with an empty assistant message" in prompt
+    assert "Chinese input receives Chinese output, English input receives English output" in prompt
     assert "call control_job with action=status at most once" in prompt
     assert "Image-presentation contract" in prompt
+    assert "Image-tool decision contract" in prompt
+    assert "ordinary generation, variants, transforms" in prompt
+    assert "analyze_image(content)" in prompt
+    assert "analyze_image(style)" in prompt
+    assert "analyze_image(3d_suitability)" in prompt
 
 
 def test_existing_agent_conversation_is_upgraded_before_its_next_turn(tmp_path: Path) -> None:
@@ -184,8 +194,7 @@ def test_agent_conversation_contract_streams_safe_replayable_events(tmp_path: Pa
     assert "Authorization" not in str(messages)
 
     latest = client.get(
-        f"/v1/agent/conversations/{conversation_id}/messages"
-        f"?project_id={project['id']}&limit=1",
+        f"/v1/agent/conversations/{conversation_id}/messages?project_id={project['id']}&limit=1",
         headers=headers,
     ).json()
     assert [item["role"] for item in latest["items"]] == ["assistant"]
@@ -227,9 +236,7 @@ def test_agent_conversation_list_restores_the_latest_nonempty_transcript(tmp_pat
         headers={**headers, "X-Request-Id": "newer-create"},
     ).json()["id"]
 
-    listed = client.get(
-        f"/v1/agent/conversations?project_id={project['id']}", headers=headers
-    )
+    listed = client.get(f"/v1/agent/conversations?project_id={project['id']}", headers=headers)
     assert listed.status_code == 200
     items = listed.json()["items"]
     assert [item["id"] for item in items] == [older]
@@ -306,11 +313,18 @@ def test_agent_image_attachment_is_managed_persisted_and_hidden_from_display_con
     provider_user = next(
         message for message in reversed(provider.requests[-1].messages) if message.role == "user"
     )
-    assert isinstance(provider_user.content, str)
-    assert f'source_asset_ref="{asset["id"]}"' in provider_user.content
-    assert f'source_asset_ref="{second_asset["id"]}"' in provider_user.content
-    assert str(image_path) not in provider_user.content
-    assert str(second_image_path) not in provider_user.content
+    assert isinstance(provider_user.content, tuple)
+    request_text = "\n".join(
+        item.text for item in provider_user.content if isinstance(item, TextContent)
+    )
+    request_images = [item for item in provider_user.content if isinstance(item, ImageContent)]
+    assert f'source_asset_ref="{asset["id"]}"' in request_text
+    assert f'source_asset_ref="{second_asset["id"]}"' in request_text
+    assert str(image_path) not in request_text
+    assert str(second_image_path) not in request_text
+    assert [item.mime_type for item in request_images] == ["image/png", "image/webp"]
+    assert base64.b64decode(request_images[0].data) == image_path.read_bytes()
+    assert base64.b64decode(request_images[1].data) == second_image_path.read_bytes()
 
     messages = client.get(
         f"/v1/agent/conversations/{conversation_id}/messages?project_id={project['id']}",
@@ -334,6 +348,93 @@ def test_agent_image_attachment_is_managed_persisted_and_hidden_from_display_con
         f"/v1/agent/conversations?project_id={project['id']}", headers=headers
     ).json()["items"]
     assert conversations[0]["preview"] == "Use both reference images."
+
+    persisted = (tmp_path / "project" / "agent.sqlite3").read_bytes()
+    assert request_images[0].data.encode() not in persisted
+    assert request_images[1].data.encode() not in persisted
+    event_payload = client.get(
+        f"/v1/agent/conversations/{conversation_id}/events?project_id={project['id']}",
+        headers=headers,
+    ).content
+    assert request_images[0].data.encode() not in event_payload
+    assert request_images[1].data.encode() not in event_payload
+
+
+def test_text_only_agent_receives_managed_reference_and_image_tool(
+    tmp_path: Path,
+) -> None:
+    provider = FakeProvider(
+        (
+            ScriptedResponse(
+                (
+                    ProviderEvent(ProviderEventType.MESSAGE_START),
+                    ProviderEvent(
+                        ProviderEventType.MESSAGE_END,
+                        message=AssistantMessage((TextContent("I inspected it with the tool."),)),
+                    ),
+                )
+            ),
+        )
+    )
+    client, headers, project = _client(tmp_path, lambda _profile: provider)
+    image_path = tmp_path / "text-only-reference.png"
+    Image.new("RGB", (8, 6), "navy").save(image_path)
+    imported = client.post(
+        f"/v1/projects/{project['id']}/assets/import",
+        json={
+            "file_capability_id": client.app.state.test_capabilities.issue(
+                image_path, "import", project["id"]
+            ),
+            "asset_type": "source_image",
+            "request_id": "text-only-image-import",
+        },
+        headers={**headers, "X-Request-Id": "text-only-image-import"},
+    ).json()
+    conversation_id = client.post(
+        "/v1/agent/conversations",
+        json={"project_id": project["id"], "model": "deepseek-v4-flash"},
+        headers={**headers, "X-Request-Id": "text-only-conversation-create"},
+    ).json()["id"]
+
+    sent = client.post(
+        f"/v1/agent/conversations/{conversation_id}/messages",
+        json={
+            "project_id": project["id"],
+            "content": "What is shown in this image?",
+            "asset_refs": [imported["id"]],
+            "request_id": "text-only-message-with-image",
+            "wait": True,
+        },
+        headers={**headers, "X-Request-Id": "text-only-message-with-image"},
+    )
+    assert sent.status_code == 200
+
+    request = provider.requests[-1]
+    provider_user = next(
+        message for message in reversed(request.messages) if message.role == "user"
+    )
+    assert isinstance(provider_user.content, str)
+    assert f'source_asset_ref="{imported["id"]}"' in provider_user.content
+    assert "must call understand_image" in provider_user.content
+    assert str(image_path) not in provider_user.content
+    assert "understand_image" in {
+        str(tool["function"]["name"])
+        for tool in request.tools
+        if isinstance(tool.get("function"), dict)
+    }
+
+    messages = client.get(
+        f"/v1/agent/conversations/{conversation_id}/messages?project_id={project['id']}",
+        headers=headers,
+    ).json()["items"]
+    assert messages[0]["content"] == "What is shown in this image?"
+    assert messages[0]["attachments"] == [
+        {
+            "asset_id": imported["id"],
+            "name": "text-only-reference.png",
+            "mime_type": "image/png",
+        }
+    ]
 
 
 def test_agent_rejects_a_non_image_attachment(tmp_path: Path) -> None:
@@ -400,9 +501,7 @@ def test_agent_failure_after_a_tool_persists_a_terminal_assistant_message(tmp_pa
             )
         )
 
-    client, headers, project = _client(
-        tmp_path, failing_provider, raise_server_exceptions=False
-    )
+    client, headers, project = _client(tmp_path, failing_provider, raise_server_exceptions=False)
     conversation_id = client.post(
         "/v1/agent/conversations",
         json={"project_id": project["id"]},
@@ -440,6 +539,52 @@ def test_agent_failure_after_a_tool_persists_a_terminal_assistant_message(tmp_pa
     ).json()
     assert status["state"] == "error"
     assert status["error_code"] == "provider_error"
+
+
+def test_agent_failure_exposes_only_an_allowlisted_provider_reason(tmp_path: Path):
+    def failing_provider(_profile):
+        class ResourceFailureProvider:
+            async def stream(self, _request, _cancellation):
+                raise ProviderError(
+                    "Provider request failed (500).",
+                    retryable=True,
+                    status_code=500,
+                    error_code="resource_exhausted",
+                    unsafe="C:\\secret\\model",
+                )
+                yield
+
+        return ResourceFailureProvider()
+
+    client, headers, project = _client(tmp_path, failing_provider, raise_server_exceptions=False)
+    conversation_id = client.post(
+        "/v1/agent/conversations",
+        json={"project_id": project["id"]},
+        headers={**headers, "X-Request-Id": "resource-conversation"},
+    ).json()["id"]
+    response = client.post(
+        f"/v1/agent/conversations/{conversation_id}/messages",
+        json={
+            "project_id": project["id"],
+            "content": "Inspect this image.",
+            "request_id": "resource-message",
+            "wait": True,
+        },
+        headers={**headers, "X-Request-Id": "resource-message"},
+    )
+    assert response.status_code == 500
+
+    events = client.get(
+        f"/v1/agent/conversations/{conversation_id}/events?project_id={project['id']}",
+        headers=headers,
+    ).json()["items"]
+    payload = events[-1]["payload"]
+    assert payload == {
+        "conversation_id": conversation_id,
+        "code": "provider_error",
+        "reason": "resource_exhausted",
+    }
+    assert "secret" not in json.dumps(events)
 
 
 def test_empty_final_assistant_message_is_not_reported_as_completed(tmp_path: Path):

@@ -198,6 +198,9 @@ export class ApiClient {
   serviceProviders() { return this.request<ServiceProviderStatusDto>("/v1/settings/service-providers"); }
   refreshServiceProviders(requestId: string) { return this.request<ServiceProviderStatusDto>("/v1/settings/service-providers/refresh", { method: "POST", headers: { "X-Request-Id": requestId } }); }
   probeServiceProvider(providerProfile: string, requestId: string) { return this.request<ServiceProviderStatusDto>("/v1/settings/service-providers/probe", { method: "POST", headers: { "X-Request-Id": requestId }, body: JSON.stringify({ provider_profile: providerProfile, request_id: requestId }) }); }
+  localProviders() { return this.request<LocalProviderStatusDto>("/v1/settings/local-providers"); }
+  refreshLocalProviders(requestId: string) { return this.request<LocalProviderStatusDto>("/v1/settings/local-providers/refresh", { method: "POST", headers: { "X-Request-Id": requestId } }); }
+  probeLocalProvider(providerProfile: string, requestId: string) { return this.request<LocalProviderStatusDto>("/v1/settings/local-providers/probe", { method: "POST", headers: { "X-Request-Id": requestId }, body: JSON.stringify({ provider_profile: providerProfile, request_id: requestId }) }); }
   updateSettings(patch: Record<string, unknown>, requestId: string) {
     return this.request<Record<string, unknown>>("/v1/settings", { method: "PATCH", headers: { "X-Request-Id": requestId }, body: JSON.stringify({ scope: "app", patch, request_id: requestId }) });
   }
@@ -318,6 +321,7 @@ export type WorkspaceStatePatch = Partial<{
   reference_context: ReferenceContextState;
   dismissed_job_ids: string[];
   image_generation_job_id: string | null;
+  candidate_result: { job_id: string; asset_ids: string[] } | null;
   workflow_contexts: WorkflowContexts;
 }>;
 
@@ -365,6 +369,8 @@ export type ReferenceContextState = {
   content_prompt_asset_id: string | null;
   style_prompt_asset_id: string | null;
   merged_prompt_asset_id: string | null;
+  suitability_asset_id?: string | null;
+  suitability_analysis_asset_id?: string | null;
 };
 
 export type WorkspaceState = {
@@ -378,6 +384,7 @@ export type WorkspaceState = {
   reference_context: ReferenceContextState;
   dismissed_job_ids: string[];
   image_generation_job_id: string | null;
+  candidate_result: { job_id: string; asset_ids: string[] } | null;
   workflow_contexts: WorkflowContexts;
 };
 export type ProjectDto = {
@@ -426,6 +433,23 @@ export type ServiceProviderStatusDto = {
     models: Record<string, string>;
     modes: string[];
     capabilities: string[];
+  }>;
+};
+export type LocalProviderStatusDto = {
+  probes_download_models: false;
+  probes_create_generation_jobs: false;
+  providers: Array<{
+    profile: string;
+    label: string;
+    engine: "ollama" | "stable_diffusion_cpp" | "triposr";
+    transport: "openai_compatible" | "controlled_process" | "worker_stdio";
+    model: string;
+    capabilities: string[];
+    configured: boolean;
+    available: boolean;
+    reason: string | null;
+    engine_version: string | null;
+    license: { identifier: string; source_url: string; notice: string };
   }>;
 };
 export type AssetDto = { id: string; asset_type: string; name: string; parent_asset_id?: string | null; thumbnail_asset_id?: string | null; is_current: boolean; is_hidden?: boolean; trashed_at?: string | null; mime_type?: string; size_bytes?: number; metadata: Record<string, unknown>; provenance?: Record<string, unknown>; version_no?: number; created_at?: string };
@@ -511,6 +535,7 @@ export type AgentMessageDto = {
   attachments?: AgentAttachmentDto[];
   details?: {
     status?: string;
+    data?: Record<string, unknown>;
     output_asset_ids?: string[];
     warnings?: string[];
     ui_action?: {
@@ -563,6 +588,7 @@ export type AgentEventDto = {
     result?: AgentToolResultDto | null;
     message?: AgentMessageDto;
     code?: string;
+    reason?: "context_overflow" | "model_load_failed" | "provider_internal" | "request_format" | "resource_exhausted" | "runner_unavailable" | "vision_request";
   };
   created_at: string;
 };

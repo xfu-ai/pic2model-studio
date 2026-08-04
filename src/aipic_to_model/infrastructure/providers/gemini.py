@@ -14,7 +14,13 @@ from typing import Any
 import httpx
 from PIL import Image, ImageDraw
 
-from ...domain.analysis_prompts import REWRITE_SYSTEM_PROMPT, system_prompt_for, user_instruction_for
+from ...domain.analysis_prompts import (
+    AGENT_IMAGE_UNDERSTANDING_SYSTEM_PROMPT,
+    REWRITE_SYSTEM_PROMPT,
+    agent_image_understanding_instruction,
+    system_prompt_for,
+    user_instruction_for,
+)
 from ...domain.prompt_parser import PromptParseError, parse_bilingual
 from ...domain.provider_models import AnalysisRequest, AnalysisResult, ProviderResult
 from .config import GeminiSettings
@@ -216,6 +222,63 @@ class GeminiVisionProvider:
                 provider_request_id=_request_id(response) or "provider-request-unavailable",
                 model=model,
             )
+
+    def understand_image(
+        self,
+        *,
+        asset_id: str,
+        question: str,
+        model: str,
+        image_bytes: bytes,
+        mime_type: str,
+    ) -> ProviderResult:
+        """Answer a text Agent's image question without the analysis-asset contract."""
+        del asset_id
+        secret = self._credential()
+        if not secret:
+            return http_failure(operation="understanding", configuration_missing=True)
+        if mime_type not in {"image/png", "image/jpeg", "image/webp"} or not image_bytes:
+            return http_failure(operation="understanding")
+        if not question.strip():
+            return http_failure(operation="understanding")
+        resolved_model = model if model.startswith("gemini-") else self._settings.analysis_model
+        response = self._post(
+            resolved_model,
+            {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": agent_image_understanding_instruction(question)},
+                            {
+                                "inlineData": {
+                                    "mimeType": mime_type,
+                                    "data": base64.b64encode(image_bytes).decode("ascii"),
+                                }
+                            },
+                        ],
+                    }
+                ],
+                "generationConfig": {"temperature": 0.1},
+                "systemInstruction": {
+                    "parts": [{"text": AGENT_IMAGE_UNDERSTANDING_SYSTEM_PROMPT}]
+                },
+            },
+            "understanding",
+        )
+        if isinstance(response, ProviderResult):
+            return response
+        data = _json_object(response)
+        text = _text(data or {}) if data is not None else None
+        if not text:
+            return http_failure(operation="understanding", request_id=_request_id(response))
+        return ProviderResult(
+            ok=True,
+            provider_request_id=_request_id(response) or "provider-request-unavailable",
+            stage="understanding",
+            retryable=False,
+            payload={"text": text},
+        )
 
     def rewrite(self, *, prompt: str, instruction: str, model: str) -> ProviderResult:
         if not prompt.strip() or not instruction.strip():

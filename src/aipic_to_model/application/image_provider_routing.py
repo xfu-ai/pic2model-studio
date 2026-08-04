@@ -6,7 +6,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 
 from ..domain.provider_models import ProviderResult
 from ..infrastructure.providers.http_errors import http_failure
@@ -34,6 +34,13 @@ class CredentialProbeRoute:
     default_model: str
     capabilities: tuple[str, ...]
     provider: Any
+
+
+@dataclass(frozen=True)
+class ImageProviderSelection:
+    profile: str
+    channel: str
+    model: str
 
 
 class PrioritizedImageGenerationProvider:
@@ -207,7 +214,9 @@ class PrioritizedImageGenerationProvider:
 
     def service_status_snapshot(self) -> dict[str, object]:
         image = self.status_snapshot()
-        image_providers = [dict(item) for item in image["providers"]]
+        image_providers = [
+            dict(item) for item in cast(list[dict[str, object]], image["providers"])
+        ]
         with self._lock:
             credential_providers = [
                 dict(
@@ -229,10 +238,11 @@ class PrioritizedImageGenerationProvider:
                 for profile, route in self._credential_probes.items()
             ]
         for item in image_providers:
+            modes = cast(list[str], item.get("modes", []))
             item["capabilities"] = [
                 label
                 for mode, label in (("t2i", "text_to_image"), ("i2i", "image_editing"))
-                if mode in item.get("modes", [])
+                if mode in modes
             ]
         for index, item in enumerate([*image_providers, *credential_providers]):
             item["display_order"] = index + 1
@@ -247,40 +257,21 @@ class PrioritizedImageGenerationProvider:
         }
 
     def generate(self, request: dict[str, object]) -> ProviderResult:
-        if self._is_stale():
-            self.refresh()
         mode = str(request.get("mode") or "")
         requested_profile = str(request.get("provider_profile") or AUTO_IMAGE_PROFILE)
-        candidates = self._priority()
-        if requested_profile != AUTO_IMAGE_PROFILE and requested_profile in self._routes:
-            candidates = [requested_profile]
-        with self._lock:
-            selected = next(
-                (
-                    self._routes[profile]
-                    for profile in candidates
-                    if profile in self._routes
-                    and mode in self._routes[profile].modes
-                    and self._status.get(profile, {}).get("available") is True
-                ),
-                None,
-            )
-        if selected is None:
-            configured = any(
-                self._status.get(profile, {}).get("configured") is True
-                for profile in candidates
-                if profile in self._routes and mode in self._routes[profile].modes
-            )
+        try:
+            selection = self.resolve_route(mode, requested_profile)
+        except ValueError:
             return http_failure(
                 operation="routing",
-                configuration_missing=not configured,
-                status_code=503 if configured else None,
+                configuration_missing=True,
             )
+        selected = self._routes[selection.profile]
         routed_request = {
             **request,
             "provider_profile": selected.profile,
             "channel": selected.channel,
-            "model": self._model_for(selected.profile, mode),
+            "model": selection.model,
         }
         result = selected.provider.generate(routed_request)
         if not result.ok:
@@ -296,6 +287,39 @@ class PrioritizedImageGenerationProvider:
                     },
                 }
             }
+        )
+
+    def resolve_route(
+        self,
+        mode: str,
+        requested_profile: str = AUTO_IMAGE_PROFILE,
+    ) -> ImageProviderSelection:
+        """Freeze one available concrete Provider without submitting work."""
+
+        if self._is_stale():
+            self.refresh()
+        candidates = self._priority()
+        if requested_profile != AUTO_IMAGE_PROFILE:
+            if requested_profile not in self._routes:
+                raise ValueError("Unknown image Provider profile")
+            candidates = [requested_profile]
+        with self._lock:
+            selected = next(
+                (
+                    self._routes[profile]
+                    for profile in candidates
+                    if profile in self._routes
+                    and mode in self._routes[profile].modes
+                    and self._status.get(profile, {}).get("available") is True
+                ),
+                None,
+            )
+        if selected is None:
+            raise ValueError("No configured image Provider is available")
+        return ImageProviderSelection(
+            profile=selected.profile,
+            channel=selected.channel,
+            model=self._model_for(selected.profile, mode),
         )
 
     def _loop(self) -> None:
