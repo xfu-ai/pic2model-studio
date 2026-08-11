@@ -21,7 +21,7 @@ _GEMINI_MODEL = "gemini-flash-lite-latest"
 _AUTO_IMAGE_PROFILE = "image-generation/auto"
 _AUTO_IMAGE_MODEL = "auto"
 _TRIPO_PROFILE = "tripo3d/default"
-_TRIPO_MODEL = "tripo-v2.5-20250123"
+_TRIPO_MODEL = "v3.1-20260211"
 RuntimeContext = Callable[[], Mapping[str, object]]
 PromptCreator = Callable[[AIPicToolInvocation, str, str], str]
 
@@ -41,7 +41,11 @@ FACADE_TOOL_NAMES = (
 
 
 def _facade_agent_result(
-    result: ToolResultV1, tool_call_id: str, *, prompt_asset_id: str | None = None
+    result: ToolResultV1,
+    tool_call_id: str,
+    *,
+    prompt_asset_id: str | None = None,
+    source_tool: str | None = None,
 ) -> ToolResult:
     """Expose continuation-critical opaque refs in model-visible Tool content.
 
@@ -58,7 +62,10 @@ def _facade_agent_result(
     continuation: dict[str, object] = {
         "status": result.status,
         "output_asset_refs": list(result.output_asset_ids),
+        "output_count": len(result.output_asset_ids),
     }
+    if source_tool:
+        continuation["source_tool"] = source_tool
     if isinstance(job_ref, str) and job_ref:
         continuation["job_ref"] = job_ref
     if prompt_asset_id:
@@ -72,12 +79,26 @@ def _facade_agent_result(
         data = dict(cast(dict[str, object], details.get("data", {})))
         data["prompt_asset_id"] = prompt_asset_id
         details["data"] = data
+    verification = details.get("verification")
+    if isinstance(verification, dict):
+        continuation["verification"] = verification
+    result_data = details.get("data")
+    if isinstance(result_data, dict) and isinstance(result_data.get("inspection"), dict):
+        continuation["inspection"] = result_data["inspection"]
+    visible_summary = next(
+        (
+            block.text
+            for block in converted.content
+            if isinstance(block, TextContent)
+        ),
+        result.summary,
+    )
     return replace(
         converted,
         details=details,
         content=(
             TextContent(
-                f"{result.summary}\nFacade result: "
+                f"{visible_summary}\nFacade result: "
                 f"{json.dumps(continuation, ensure_ascii=False, separators=(',', ':'))}"
             ),
         ),
@@ -114,10 +135,10 @@ _MODEL_PARAMETERS = _object(
         "texture_quality": {"enum": ["standard", "detailed", "extreme"]},
         "geometry_quality": {"enum": ["standard", "detailed"]},
         "texture_alignment": {"enum": ["original_image", "geometry"]},
-        "texture": {"type": "boolean", "const": True, "default": True},
-        "pbr": {"type": "boolean", "const": True, "default": True},
+        "texture": {"type": "boolean", "default": True},
+        "pbr": {"type": "boolean", "default": True},
         "quad": {"type": "boolean"},
-        "face_limit": {"type": "integer", "minimum": 0, "default": 100_000},
+        "face_limit": {"type": "integer", "minimum": 1, "default": 100_000},
         "auto_size": {"type": "boolean"},
         "orientation": {"enum": ["default", "align_image"]},
         "smart_low_poly": {"type": "boolean"},
@@ -146,7 +167,8 @@ FACADE_TOOL_SPECS = (
             "Inspect the current managed workspace. Use summary for project state, assets for "
             "a paged managed-asset list, asset_details for one asset, compare for two sibling "
             "assets, jobs for one known job, and capabilities for the fixed facade inventory. "
-            "Do not use it to change projects, assets, settings, approvals, or files."
+            "Do not use it to rediscover an output_asset_ref already returned by a Tool result, "
+            "or to change projects, assets, settings, approvals, or files."
         ),
         _object(
             {
@@ -239,7 +261,9 @@ FACADE_TOOL_SPECS = (
             "Generate managed image candidates. Use from_prompt without a source, from_image "
             "to transform one source, and variants for alternatives of one source. This is a "
             "paid external operation requiring parameter-bound approval. Do not use it for "
-            "upscale, background removal, inpainting, splitting, or multiview generation."
+            "upscale, background removal, inpainting, splitting, or multiview generation. A "
+            "reference-image style change keeps its source_asset_ref and uses from_image unless "
+            "the user explicitly removes the reference image."
         ),
         _object(
             {
@@ -266,7 +290,12 @@ FACADE_TOOL_SPECS = (
             "Apply one managed image edit. Local offline operations include trim_transparent, "
             "normalize, remove_background_local, and upscale_local. Provider operations remain "
             "upscale, remove_background, inpaint, and export_transparent. Inpaint requires a "
-            "confirmed selection and managed prompt. Never silently replace a local operation "
+            "confirmed selection and managed prompt. Direct background removal is a valid one-step "
+            "operation. Use local color_key only for a flat keyed background, local channel for a "
+            "separable channel range, Provider remove_background for a complex background, and "
+            "export_transparent for an already extracted element. Do not guess target_color or "
+            "tolerance from appearance; omit target_color to derive it from corners. When continuing "
+            "a Tool result, copy its exact output_asset_ref. Never silently replace a local operation "
             "with a Provider operation. Do not use it for candidate generation or multiview work."
         ),
         _object(
@@ -323,7 +352,7 @@ FACADE_TOOL_SPECS = (
         (
             "Split one managed image. Use alpha_components or grid for deterministic local "
             "offline splitting without a prompt. Use element for semantic Provider breakdown "
-            "with a managed prompt. Use boxsplit for a confirmed selection; if it is omitted, "
+            "with a managed prompt. Direct splitting is a valid one-step operation. Use boxsplit for a confirmed selection; if it is omitted, "
             "the desktop opens target extraction for the user. Do not claim a user selection "
             "was completed by the Agent."
         ),
@@ -347,18 +376,19 @@ FACADE_TOOL_SPECS = (
         "prepare_multiview",
         "Prepare multiview",
         (
-            "Create a front-side-back sheet, or inspect or repair a managed multiview set. Use create "
+            "Create a front-side-back sheet, request persisted user crop confirmation, or inspect or repair a managed multiview set. Use create "
             "from one source image; its result is a sheet asset, not a multiview-set reference. "
             "Use detect_regions only when the user explicitly asks for experimental automatic "
             "region detection on an existing persisted multiview set that has no saved front, "
             "side, and back crops, and "
+            "request_region_confirmation with the generated sheet asset to open the desktop and pause until three persisted crops are returned. Use "
             "regenerate_view for exactly one view. Region confirmation remains a user action; "
             "a separate quality checkbox is not required. A confirmed set with distinct front, side, and back crop assets must "
             "go directly to 3D generation without detection. Do not use it to generate a 3D model."
         ),
         _object(
             {
-                "operation": {"enum": ["create", "detect_regions", "regenerate_view"]},
+                "operation": {"enum": ["create", "request_region_confirmation", "detect_regions", "regenerate_view"]},
                 "source_asset_ref": _REF,
                 "prompt_asset_ref": _REF,
                 "multiview_ref": _REF,
@@ -372,8 +402,9 @@ FACADE_TOOL_SPECS = (
         "Generate 3D model",
         (
             "Generate one managed 3D model from exactly one suitable image or one confirmed "
-            "front-side-back multiview set. This paid external operation always requires "
-            "parameter-bound approval and always requests textures plus PBR material maps. "
+            "front-side-back multiview set. The selected backend determines material output: "
+            "local TripoSR produces vertex colors without PBR maps, while remote backends may "
+            "produce textures and PBR. Paid external execution requires parameter-bound approval. "
             "For multiview mode, multiview_ref is the persisted set_id from the workspace "
             "summary, never the source sheet asset reference; view_asset_refs are the three "
             "distinct confirmed crop asset references. "
@@ -435,11 +466,18 @@ FACADE_TOOL_SPECS = (
         "Control job",
         (
             "Read or control one known durable job. Use status only when the user asks for "
-            "progress and no fresh event is in context. Use cancel or retry only for explicit "
-            "user intent. Never poll repeatedly. Do not invent a job reference."
+            "progress and no fresh event is in context. Use cancel, retry, or "
+            "confirm_new_submission only for explicit user intent. The confirmation action is "
+            "only for an interrupted paid Job with unknown submission state. Never poll "
+            "repeatedly. Do not invent a job reference."
         ),
         _object(
-            {"action": {"enum": ["status", "cancel", "retry"]}, "job_ref": _REF},
+            {
+                "action": {
+                    "enum": ["status", "cancel", "retry", "confirm_new_submission"]
+                },
+                "job_ref": _REF,
+            },
             ("action", "job_ref"),
         ),
     ),
@@ -487,7 +525,7 @@ _PARAMETER_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "scale": "Required for upscale or upscale_local: integer scale factor 2 or 4.",
         "padding": "Optional only for trim_transparent: transparent pixels retained around detected content.",
         "alpha_threshold": "Optional only for trim_transparent: alpha values at or below this value count as transparent.",
-        "background_method": "Required for remove_background_local: color_key uses a corner-derived or explicit RGB background; channel creates alpha from a selected channel range.",
+        "background_method": "Required for remove_background_local: use color_key only for a flat keyed background and channel only when one channel/luminance/saturation range separates foreground. For gradients, shadows, texture, or foreground-like background colors use Provider remove_background instead.",
         "target_color": "Optional only for local color_key: exact RGB triplet. Omit to derive the background from image corners.",
         "target_width": "Optional only for normalize: positive target width.",
         "target_height": "Optional only for normalize: positive target height.",
@@ -520,8 +558,8 @@ _PARAMETER_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "max_outputs": "Optional local safety limit for the number of created managed assets.",
     },
     "prepare_multiview": {
-        "operation": "create generates a multiview set; detect_regions analyzes an existing set; regenerate_view replaces exactly one view.",
-        "source_asset_ref": "Required only for create: opaque reference of the managed source image.",
+        "operation": "create generates a multiview sheet; request_region_confirmation opens the desktop confirmation flow for that sheet; detect_regions analyzes an existing set; regenerate_view replaces exactly one view.",
+        "source_asset_ref": "Required for create (modeling source image) and request_region_confirmation (generated sheet asset).",
         "prompt_asset_ref": "Optional only for create: opaque reference of a managed multiview prompt.",
         "multiview_ref": "Required for detect_regions and regenerate_view: opaque reference of the existing managed multiview set.",
         "target_view": "Required only for regenerate_view: the one front, side, or back view to replace.",
@@ -541,7 +579,7 @@ _PARAMETER_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "max_texture_bytes": "Optional only for optimize: maximum total texture bytes.",
     },
     "control_job": {
-        "action": "status reads once; cancel requests cancellation; retry creates a safe retry when allowed.",
+        "action": "status reads once; cancel requests cancellation; retry creates a safe retry when allowed; confirm_new_submission starts the separately approved recovery path for an unknown paid submission.",
         "job_ref": "Opaque reference of an existing durable job returned by a prior Tool result or runtime event; never invent it.",
     },
 }
@@ -551,13 +589,13 @@ _MODEL_PARAMETER_DESCRIPTIONS = {
     "texture_quality": "Requested texture quality.",
     "geometry_quality": "Requested geometry detail.",
     "texture_alignment": "Align texture to the source image or generated geometry.",
-    "texture": "Always true: Agent-generated models include textures.",
-    "pbr": "Always true: Agent-generated models include PBR material maps.",
+    "texture": "Request textured/material color output when the selected backend supports it.",
+    "pbr": "Request PBR maps when supported; local TripoSR overrides this to false and uses vertex colors.",
     "quad": "Whether to request quad topology.",
-    "face_limit": "Maximum face count. Default to 100,000; use 50,000 for real-time/game use, and use zero only when the user explicitly requests the Provider's unlimited default.",
+    "face_limit": "Maximum face count. Default to 100,000; use 50,000 for real-time/game use only with smart_low_poly=false. When smart_low_poly=true, use 500-20,000 for triangle output or 500-10,000 with quad=true. Never use zero or an unlimited Provider budget.",
     "auto_size": "Whether the Provider should determine model scale automatically.",
     "orientation": "Use Provider default orientation or align to the input image.",
-    "smart_low_poly": "Whether to use smart low-poly processing.",
+    "smart_low_poly": "Use clean Smart Low-poly topology only with a compatible explicit face_limit: 500-20,000 for triangles or 500-10,000 with quad=true. For a 50,000-face game model set this to false.",
     "generate_parts": "Whether to request separable model parts.",
     "compress": "Optional Provider compression mode; empty means no explicit compression.",
     "enable_image_autofix": "Whether the Provider may repair the input image before generation.",
@@ -578,6 +616,15 @@ def _with_parameter_descriptions(spec: FacadeToolSpec) -> FacadeToolSpec:
     }
     for name, description in _PARAMETER_DESCRIPTIONS[spec.name].items():
         properties[name]["description"] = description
+    properties["plan_step_id"] = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80,
+        "description": (
+            "Optional exact id of the current AI-authored Plan step this Tool call advances. "
+            "It updates display progress only and never grants or blocks Tool permission."
+        ),
+    }
     if spec.name == "generate_model3d":
         parameters = dict(properties["parameters"])
         raw_parameters = parameters.get("properties", {})
@@ -607,7 +654,12 @@ def _with_parameter_descriptions(spec: FacadeToolSpec) -> FacadeToolSpec:
         }
         properties["view_asset_refs"] = view_refs
     schema["properties"] = properties
-    return FacadeToolSpec(spec.name, spec.label, spec.description, schema)
+    description = (
+        spec.description
+        + " When this call advances the current execution Plan, pass that step's exact "
+        "plan_step_id; omit it for unplanned support work."
+    )
+    return FacadeToolSpec(spec.name, spec.label, description, schema)
 
 
 FACADE_TOOL_SPECS = tuple(
@@ -654,9 +706,10 @@ class AIPicFacadeTool:
         invocation: Callable[[], AIPicToolInvocation],
         runtime_context: RuntimeContext | None = None,
         prompt_creator: PromptCreator | None = None,
+        job_completion_broker: Any | None = None,
     ) -> None:
         self._dispatcher = _FacadeDispatcher(
-            registry, invocation, runtime_context, prompt_creator
+            registry, invocation, runtime_context, prompt_creator, job_completion_broker
         )
         self.name = spec.name
         self.label = spec.label
@@ -690,11 +743,13 @@ class _FacadeDispatcher:
         invocation: Callable[[], AIPicToolInvocation],
         runtime_context: RuntimeContext | None = None,
         prompt_creator: PromptCreator | None = None,
+        job_completion_broker: Any | None = None,
     ) -> None:
         self._registry = registry
         self._invocation = invocation
         self._runtime_context = runtime_context
         self._prompt_creator = prompt_creator
+        self._job_completion_broker = job_completion_broker
 
     async def execute(
         self,
@@ -725,11 +780,22 @@ class _FacadeDispatcher:
                     )
                 )
                 arguments = {**arguments, "prompt_asset_ref": materialized_prompt_id}
+            if facade_name == "prepare_multiview" and arguments.get("operation") == "create":
+                await self._require_image_asset(
+                    _required_str(arguments, "source_asset_ref"),
+                    tool_call_id,
+                    cancellation,
+                )
+            if facade_name == "generate_model3d" and arguments.get("mode") == "image":
+                await self._require_image_asset(
+                    _required_str(arguments, "image_asset_ref"),
+                    tool_call_id,
+                    cancellation,
+                )
             internal_name, internal_arguments = self._translate(facade_name, arguments)
             if internal_name == "__facade_capabilities__":
                 payload = dict(self._runtime_context()) if self._runtime_context else {
                     "schema_version": 1,
-                    "facade_tools": list(FACADE_TOOL_NAMES),
                     "capabilities": {},
                     "configuration_state": "unavailable",
                 }
@@ -769,10 +835,26 @@ class _FacadeDispatcher:
                 tool_call_id,
                 cancellation,
             )
+            if result.status == "queued" and self._job_completion_broker is not None:
+                job = result.job or {}
+                job_id = job.get("job_id")
+                if isinstance(job_id, str) and job_id:
+                    invocation = self._invocation()
+                    terminal = await cancellation.wait_for(
+                        self._job_completion_broker.wait_for_terminal(
+                            invocation.root / "project.sqlite3", job_id, timeout_seconds=180.0
+                        )
+                    )
+                    if terminal is None:
+                        return _waiting_external_agent_result(tool_call_id, job_id)
+                    return _terminal_job_agent_result(terminal, tool_call_id)
             if facade_name == "inspect_workspace" and arguments.get("view") == "assets":
                 result = _newest_assets_first(result)
             return _facade_agent_result(
-                result, tool_call_id, prompt_asset_id=materialized_prompt_id
+                result,
+                tool_call_id,
+                prompt_asset_id=materialized_prompt_id,
+                source_tool=facade_name,
             )
         except DomainErrorV1 as error:
             payload = error.as_dict()
@@ -861,6 +943,40 @@ class _FacadeDispatcher:
                 arguments.get("provider_profile"),
             )
         )
+
+    async def _require_image_asset(
+        self,
+        asset_ref: str,
+        tool_call_id: str,
+        cancellation: CancellationToken,
+    ) -> None:
+        """Reject non-image inputs before generation policy or approval runs."""
+
+        metadata = await self._call(
+            "asset.get_metadata",
+            {"asset_id": asset_ref},
+            f"{tool_call_id}-input-metadata",
+            cancellation,
+        )
+        if not metadata.ok:
+            raise ValueError("The source asset could not be inspected as an image.")
+        try:
+            payload = json.loads(metadata.summary)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ValueError("The source asset metadata is invalid.") from error
+        asset = payload.get("asset") if isinstance(payload, dict) else None
+        asset_type = asset.get("asset_type") if isinstance(asset, dict) else None
+        mime_type = asset.get("mime_type") if isinstance(asset, dict) else None
+        if asset_type not in {
+            "source_image",
+            "generated_image",
+            "annotation",
+            "crop",
+            "multiview",
+        } or not isinstance(mime_type, str) or not mime_type.startswith("image/"):
+            raise ValueError(
+                "The source asset must be a managed image, not a prompt, model, or other asset."
+            )
 
     def _translate(
         self, facade_name: str, arguments: dict[str, object]
@@ -958,6 +1074,7 @@ class _FacadeDispatcher:
                     "status": "job.get_status",
                     "cancel": "job.cancel",
                     "retry": "job.retry",
+                    "confirm_new_submission": "job.confirm_new_submission",
                 }[action],
                 {"job_id": _required_str(arguments, "job_ref")},
             )
@@ -1163,6 +1280,11 @@ class _FacadeDispatcher:
                     "model": _GEMINI_MODEL,
                 },
             )
+        if operation == "request_region_confirmation":
+            return (
+                "multiview.request_box_confirmation",
+                {"multiview_set_id": _required_str(arguments, "source_asset_ref")},
+            )
         if operation == "regenerate_view":
             return (
                 "multiview.regenerate_view",
@@ -1185,10 +1307,12 @@ class _FacadeDispatcher:
         if not isinstance(parameters, dict):
             raise TypeError("parameters must be an object.")
         normalized_parameters = dict(parameters)
-        # Agent-driven production always returns a preview-ready textured model.
-        # Keep this normalization at the dispatch boundary as a defense in depth
-        # for callers that bypass JSON Schema validation.
-        normalized_parameters.update(texture=True, pbr=True)
+        # Safe remote defaults are requested here. The application generation
+        # policy overrides backend-incompatible options (notably local TripoSR
+        # PBR) before the request is persisted.
+        normalized_parameters.setdefault("face_limit", 100_000)
+        normalized_parameters.setdefault("texture", True)
+        normalized_parameters.setdefault("pbr", True)
         payload: dict[str, Any] = {
             "mode": mode,
             "provider_profile": _TRIPO_PROFILE,
@@ -1249,12 +1373,103 @@ def facade_tools(
     invocation: Callable[[], AIPicToolInvocation],
     runtime_context: RuntimeContext | None = None,
     prompt_creator: PromptCreator | None = None,
+    job_completion_broker: Any | None = None,
 ) -> tuple[AIPicFacadeTool, ...]:
     """Return the fixed business facades in documented order."""
 
     return tuple(
-        AIPicFacadeTool(registry, spec, invocation, runtime_context, prompt_creator)
+        AIPicFacadeTool(
+            registry,
+            spec,
+            invocation,
+            runtime_context,
+            prompt_creator,
+            job_completion_broker,
+        )
         for spec in FACADE_TOOL_SPECS
+    )
+
+def _terminal_job_agent_result(job: Any, tool_call_id: str) -> ToolResult:
+    status = getattr(getattr(job, "status", None), "value", getattr(job, "status", "failed"))
+    output_asset_refs = list(getattr(job, "result_asset_ids", []))
+    succeeded = status == "succeeded"
+    error = getattr(job, "error", None)
+    summary = (
+        "The Job completed successfully."
+        if succeeded
+        else f"The Job ended with status {status}."
+    )
+    continuation = {
+        "status": status,
+        "output_asset_refs": output_asset_refs,
+    }
+    job_type = str(getattr(job, "job_type", ""))
+    provider = str(getattr(job, "provider", ""))
+    artifact_facts: dict[str, JsonValue] | None = None
+    warnings: list[str] = []
+    if succeeded and job_type == "model3d.generate":
+        local = provider == "model3d/local/triposr"
+        artifact_facts = {
+            "file_created": bool(output_asset_refs),
+            "semantic_match": "not_verified",
+            "pbr": False if local else "backend_report_required",
+            "material_mode": "vertex_color" if local else "backend_report_required",
+        }
+        warnings.append(
+            "File creation succeeded, but subject identity, style, and localized image edits "
+            "have not been visually verified."
+        )
+        continuation["artifact_facts"] = artifact_facts
+    details: dict[str, JsonValue] = {
+        "schema_version": 1,
+        "ok": succeeded,
+        "status": status,
+        "tool_call_id": tool_call_id,
+        "summary": summary,
+        "data": {
+            "output_asset_refs": output_asset_refs,
+            **({"artifact_facts": artifact_facts} if artifact_facts is not None else {}),
+        },
+        "output_asset_ids": output_asset_refs,
+        "output_refs": output_asset_refs,
+        "warnings": warnings,
+        "reused": False,
+    }
+    if artifact_facts is not None:
+        details["artifact_facts"] = artifact_facts
+    if not succeeded:
+        details["error"] = cast(JsonValue, error or {"code": "JOB_NOT_SUCCEEDED"})
+    return ToolResult(
+        (TextContent(f"{summary}\nFacade result: {json.dumps(continuation, separators=(',', ':'))}"),),
+        details=details,
+        is_error=not succeeded,
+    )
+
+
+def _waiting_external_agent_result(tool_call_id: str, job_id: str) -> ToolResult:
+    continuation = {
+        "status": "waiting_external",
+        "job_ref": job_id,
+        "waited_seconds": 180,
+        "output_asset_refs": [],
+    }
+    return ToolResult(
+        (TextContent(f"The Job is still processing in the background.\nFacade result: {json.dumps(continuation, separators=(',', ':'))}"),),
+        details=cast(
+            JsonValue,
+            {
+                "schema_version": 1,
+                "ok": True,
+                "status": "waiting_external",
+                "tool_call_id": tool_call_id,
+                "summary": "The Job is still processing in the background.",
+                "data": continuation,
+                "output_asset_ids": [],
+                "output_refs": [],
+                "warnings": [],
+                "reused": False,
+            },
+        ),
     )
 
 

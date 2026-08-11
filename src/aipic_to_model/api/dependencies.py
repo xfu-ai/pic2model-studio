@@ -15,6 +15,7 @@ from ..application.events import EventService
 from ..application.host_capabilities import HostCapabilityStore
 from ..application.jobs.recovery_service import JobRecoveryService
 from ..application.jobs.runner import BackgroundJobRunner
+from ..application.jobs.completion_broker import JobCompletionBroker
 from ..application.jobs.worker import ProductionJobWorker
 from ..application.multiview import MultiviewService
 from ..application.projects import ProjectService
@@ -46,6 +47,7 @@ class AppDependencies:
     job_recovery: JobRecoveryService
     b02_runtime: PersistentB02ToolRuntime
     job_worker: ProductionJobWorker
+    job_completion_broker: JobCompletionBroker
     roots: dict[str, Path] = field(default_factory=dict)
     job_runner: BackgroundJobRunner | None = None
     image_provider_monitor: Any | None = None

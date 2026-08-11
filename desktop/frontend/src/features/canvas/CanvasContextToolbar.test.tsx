@@ -178,4 +178,92 @@ describe("CanvasContextToolbar", () => {
     expect(onModeChange).toHaveBeenCalledWith("task_waiting");
     expect(onModelJobQueued).toHaveBeenCalledWith("job-3d");
   });
+
+  it("creates a local resized asset and makes it current", async () => {
+    const api = {
+      invokeTool: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "succeeded",
+        output_asset_ids: ["asset-resized"],
+      }),
+      setCurrentAsset: vi.fn().mockResolvedValue({}),
+    };
+    const onModeChange = vi.fn();
+    const onLocalImageCompleted = vi.fn();
+    render(
+      <CanvasContextToolbar
+        projectId="project-1"
+        api={api as never}
+        asset={image}
+        promptAsset={prompt}
+        referenceAvailable
+        onModeChange={onModeChange}
+        onLocalImageCompleted={onLocalImageCompleted}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /调整尺寸与超分/ }));
+    expect(screen.getByRole("dialog", { name: "调整尺寸与超分" })).toHaveTextContent("原图不会被覆盖");
+    fireEvent.change(screen.getByLabelText("目标宽度"), { target: { value: "768" } });
+    fireEvent.change(screen.getByLabelText("目标高度"), { target: { value: "512" } });
+    fireEvent.change(screen.getByLabelText("输出格式"), { target: { value: "webp" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成缩放结果" }));
+
+    await waitFor(() => expect(api.invokeTool).toHaveBeenCalledWith(
+      "project-1",
+      "image.normalize",
+      {
+        source_asset_id: "asset-image",
+        target_width: 768,
+        target_height: 512,
+        lock_aspect_ratio: true,
+        output_format: "webp",
+        quality: 90,
+        preserve_alpha: true,
+      },
+      expect.any(String),
+    ));
+    expect(api.setCurrentAsset).toHaveBeenCalledWith("project-1", "asset-resized", expect.any(String));
+    expect(onLocalImageCompleted).toHaveBeenCalledWith("asset-resized");
+    expect(onModeChange).toHaveBeenCalledWith("image");
+  });
+
+  it("queues bundled local super-resolution without Provider approval", async () => {
+    const api = {
+      invokeTool: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "queued",
+        output_asset_ids: [],
+        job: { job_id: "job-upscale", status: "queued" },
+      }),
+      decideApproval: vi.fn(),
+    };
+    const onModeChange = vi.fn();
+    render(
+      <CanvasContextToolbar
+        projectId="project-1"
+        api={api as never}
+        asset={image}
+        promptAsset={prompt}
+        referenceAvailable
+        onModeChange={onModeChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /调整尺寸与超分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "本地超分" }));
+    fireEvent.change(screen.getByLabelText("放大倍数"), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始本地超分" }));
+
+    await waitFor(() => expect(api.invokeTool).toHaveBeenCalledWith(
+      "project-1",
+      "image.upscale_local",
+      { source_asset_id: "asset-image", scale: 4 },
+      expect.any(String),
+    ));
+    expect(api.decideApproval).not.toHaveBeenCalled();
+    expect(onModeChange).toHaveBeenCalledWith("task_waiting");
+  });
 });

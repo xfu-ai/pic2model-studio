@@ -183,6 +183,42 @@ def test_tripo_v2_compatibility_translates_v3_model_field() -> None:
     assert "model" not in seen_payload
 
 
+def test_tripo_v3_treats_success_http_with_provider_error_code_as_rejected() -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "rejected-request"},
+            json={"code": 2004, "message": "redacted by adapter"},
+            request=request,
+        )
+
+    provider = HttpTripo3DProvider(
+        TripoHttpSettings(
+            "https://openapi.tripo3d.ai",
+            frozenset({"cdn.tripo3d.ai"}),
+        ),
+        lambda: "secret",
+        client=httpx.Client(transport=httpx.MockTransport(transport)),
+    )
+
+    result = provider.create(
+        {
+            "input": "file-token",
+            "model": "v3.1-20260211",
+            "smart_low_poly": True,
+            "face_limit": 50_000,
+        },
+        idempotency_key="stable",
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.code == "PROVIDER_REQUEST_INVALID"
+    assert result.error.recommended_action.value == "fix_input"
+    assert result.error.fee_incurred is False
+    assert "redacted by adapter" not in result.model_dump_json()
+
+
 def test_tripo_task_poll_retries_transient_transport_or_service_failures() -> None:
     calls = 0
     delays: list[float] = []

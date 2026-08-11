@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+import subprocess
+import sys
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header
@@ -15,6 +18,22 @@ class ExportAssetRequest(BaseModel):
     project_id: str = Field(min_length=1)
     export_capability_id: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
+
+
+def _open_managed_asset_directory(path: Path) -> None:
+    """Open a containing directory without returning native paths to the renderer."""
+    if os.environ.get("AIPIC_CONTROLLED_E2E") == "1":
+        return
+    directory = path.parent
+    if sys.platform == "win32":
+        subprocess.Popen(
+            ["explorer.exe", str(directory)],
+            close_fds=True,
+        )
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(directory)], close_fds=True)
+    else:
+        subprocess.Popen(["xdg-open", str(directory)], close_fds=True)
 
 
 def build_asset_router(guard: OriginGuard, dependencies: AppDependencies) -> APIRouter:
@@ -36,10 +55,16 @@ def build_asset_router(guard: OriginGuard, dependencies: AppDependencies) -> API
         ).copy()
 
     @router.get("/v1/projects/{project_id}/assets", dependencies=[Depends(guard.check)])
-    def list_assets(project_id: str, include_trashed: bool = False, include_hidden: bool = True):
+    def list_assets(
+        project_id: str,
+        include_trashed: bool = False,
+        include_hidden: bool = True,
+        include_visual_identities: bool = False,
+    ):
         return dependencies.assets.list_by_group(
             dependencies.root_for(project_id), project_id, include_trashed=include_trashed,
             include_hidden=include_hidden,
+            include_visual_identities=include_visual_identities,
         )
 
     @router.get("/v1/assets/{asset_id}", dependencies=[Depends(guard.check)])
@@ -104,6 +129,22 @@ def build_asset_router(guard: OriginGuard, dependencies: AppDependencies) -> API
         finally:
             temporary.unlink(missing_ok=True)
         return {"asset_id": asset_id, "name": safe_name, "bytes": len(data)}
+
+    @router.post("/v1/assets/{asset_id}/reveal", dependencies=[Depends(guard.check)])
+    def reveal_asset(asset_id: str, body: AssetActionRequest):
+        root = dependencies.root_for(body.project_id)
+        path = dependencies.assets.managed_file_for_host(root, body.project_id, asset_id)
+        try:
+            _open_managed_asset_directory(path)
+        except OSError as error:
+            from ...domain.errors import DomainErrorV1, ErrorCode
+
+            raise DomainErrorV1(
+                ErrorCode.LOCAL_STORAGE_UNAVAILABLE,
+                "无法打开资产所在目录。",
+                True,
+            ) from error
+        return {"asset_id": asset_id, "opened": True}
 
     @router.post("/v1/assets/{asset_id}/set-current", dependencies=[Depends(guard.check)])
     def set_current(asset_id: str, body: SetCurrentRequest):

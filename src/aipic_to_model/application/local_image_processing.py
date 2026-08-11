@@ -30,6 +30,102 @@ class LocalImageArtifact:
     metadata: dict[str, object]
 
 
+def _image_verification(image: Image.Image, *, operation: str) -> dict[str, object]:
+    """Return small, deterministic evidence for an image artifact.
+
+    This deliberately reports facts and advisory warnings only.  The caller may
+    give the report to an Agent for the next decision, but a quality warning
+    never turns a successful local operation into a failed one.
+    """
+
+    rgba = image.convert("RGBA")
+    alpha = np.asarray(rgba.getchannel("A"), dtype=np.uint8)
+    total = int(alpha.size)
+    transparent = int(np.count_nonzero(alpha == 0))
+    non_opaque = int(np.count_nonzero(alpha < 255))
+    opaque = int(np.count_nonzero(alpha == 255))
+    facts: dict[str, object] = {
+        "width": rgba.width,
+        "height": rgba.height,
+        "total_pixels": total,
+        "transparent_pixel_ratio": round(transparent / total, 6),
+        "non_opaque_pixel_ratio": round(non_opaque / total, 6),
+        "opaque_pixel_ratio": round(opaque / total, 6),
+    }
+    checks: list[dict[str, object]] = [
+        {
+            "code": "image.dimensions",
+            "outcome": "pass",
+            "observed": {"width": rgba.width, "height": rgba.height},
+        }
+    ]
+    disposition = "verified"
+    if operation == "remove_background_local":
+        border = np.concatenate(
+            (alpha[0, :], alpha[-1, :], alpha[1:-1, 0], alpha[1:-1, -1])
+        )
+        border_opaque_ratio = float(np.count_nonzero(border >= 250)) / int(border.size)
+        corner_alpha = np.asarray(
+            (alpha[0, 0], alpha[0, -1], alpha[-1, 0], alpha[-1, -1]),
+            dtype=np.uint8,
+        )
+        opaque_corner_count = int(np.count_nonzero(corner_alpha >= 250))
+        facts["border_opaque_ratio"] = round(border_opaque_ratio, 6)
+        facts["opaque_corner_count"] = opaque_corner_count
+        if non_opaque / total < 0.01:
+            checks.append(
+                {
+                    "code": "image.background_removal_alpha",
+                    "outcome": "warn",
+                    "expected": {"non_opaque_pixel_ratio_min": 0.01},
+                    "observed": {"non_opaque_pixel_ratio": facts["non_opaque_pixel_ratio"]},
+                    "message": "Very little transparency was created; inspect the background result.",
+                }
+            )
+            disposition = "review_required"
+        if opaque_corner_count:
+            checks.append(
+                {
+                    "code": "image.background_removal_corners",
+                    "outcome": "warn",
+                    "expected": {"opaque_corner_count_max": 0},
+                    "observed": {"opaque_corner_count": opaque_corner_count},
+                    "message": "Opaque pixels remain at one or more image corners; inspect for background residue.",
+                }
+            )
+            disposition = "review_required"
+        if border_opaque_ratio > 0.05:
+            checks.append(
+                {
+                    "code": "image.background_removal_border",
+                    "outcome": "warn",
+                    "expected": {"border_opaque_ratio_max": 0.05},
+                    "observed": {"border_opaque_ratio": facts["border_opaque_ratio"]},
+                    "message": "A substantial opaque region remains on the image border; inspect the background result.",
+                }
+            )
+            disposition = "review_required"
+        if opaque / total < 0.02:
+            checks.append(
+                {
+                    "code": "image.background_removal_foreground",
+                    "outcome": "warn",
+                    "expected": {"opaque_pixel_ratio_min": 0.02},
+                    "observed": {"opaque_pixel_ratio": facts["opaque_pixel_ratio"]},
+                    "message": "Very little opaque foreground remains; the removal may be too aggressive.",
+                }
+            )
+            disposition = "review_required"
+    return {
+        "schema_version": 1,
+        "kind": "image_artifact",
+        "operation": operation,
+        "disposition": disposition,
+        "facts": facts,
+        "checks": checks,
+    }
+
+
 def _open_image(content: bytes) -> Image.Image:
     if not content:
         raise ValueError("Image content is empty.")
@@ -49,12 +145,13 @@ def _png_artifact(image: Image.Image, **metadata: object) -> LocalImageArtifact:
         raise ValueError("Processed image exceeds the output pixel limit.")
     output = BytesIO()
     image.save(output, "PNG", optimize=True)
+    operation = str(metadata.get("operation", "image_process"))
     return LocalImageArtifact(
         output.getvalue(),
         ".png",
         image.width,
         image.height,
-        {"format": "png", **metadata},
+        {"format": "png", "verification": _image_verification(image, operation=operation), **metadata},
     )
 
 
@@ -174,6 +271,7 @@ def normalize_image(
             "preserve_alpha": preserve_alpha,
             "rotate_degrees": rotate_degrees,
             "flip": flip,
+            "verification": _image_verification(image, operation="normalize"),
         },
     )
 
@@ -190,6 +288,28 @@ def _corner_color(pixels: np.ndarray) -> tuple[int, int, int]:
     )
     median = np.median(samples, axis=0)
     return int(median[0]), int(median[1]), int(median[2])
+
+
+def _corner_tolerance(
+    pixels: np.ndarray, chosen: tuple[int, int, int], minimum: int
+) -> int:
+    """Estimate keyed-background variation from small corner regions."""
+
+    height, width = pixels.shape[:2]
+    extent = max(2, min(height, width) // 32)
+    samples = np.concatenate(
+        (
+            pixels[:extent, :extent, :3].reshape(-1, 3),
+            pixels[:extent, -extent:, :3].reshape(-1, 3),
+            pixels[-extent:, :extent, :3].reshape(-1, 3),
+            pixels[-extent:, -extent:, :3].reshape(-1, 3),
+        )
+    ).astype(np.float32)
+    distance = np.sqrt(
+        np.sum((samples - np.asarray(chosen, dtype=np.float32)) ** 2, axis=1)
+    )
+    estimated = int(np.ceil(np.percentile(distance, 99))) + 8
+    return min(255, max(minimum, estimated))
 
 
 def _contiguous_background(mask: np.ndarray) -> np.ndarray:
@@ -263,19 +383,27 @@ def remove_background_local(
 
     if method == "color_key":
         chosen = target_color or _corner_color(pixels)
+        effective_tolerance = (
+            tolerance
+            if target_color is not None
+            else _corner_tolerance(pixels, chosen, tolerance)
+        )
         delta = pixels[..., :3].astype(np.int16) - np.asarray(chosen, dtype=np.int16)
         distance = np.sqrt(np.sum(delta.astype(np.float32) ** 2, axis=2))
-        candidate = distance <= tolerance
+        candidate = distance <= effective_tolerance
         background = _contiguous_background(candidate) if contiguous_only else candidate
         alpha = original_alpha.copy()
         alpha[background] = 0
-        if tolerance > 0:
-            boundary = (distance > tolerance) & (distance < tolerance + 8)
-            softness = _smoothstep((distance - tolerance) / 8.0) * original_alpha
+        if effective_tolerance > 0:
+            boundary = (distance > effective_tolerance) & (distance < effective_tolerance + 8)
+            softness = (
+                _smoothstep((distance - effective_tolerance) / 8.0) * original_alpha
+            )
             alpha[boundary] = np.minimum(alpha[boundary], softness[boundary])
         parameters: dict[str, object] = {
             "target_color": list(chosen),
-            "tolerance": tolerance,
+            "tolerance": effective_tolerance,
+            "tolerance_auto": target_color is None,
             "contiguous_only": contiguous_only,
         }
     else:
@@ -492,7 +620,7 @@ class LocalImageProcessingService:
         try:
             temporary.parent.mkdir(parents=True, exist_ok=True)
             temporary.write_bytes(artifact.content)
-            return self._assets.register_derived(
+            registered = self._assets.register_derived(
                 root,
                 project_id,
                 temporary,
@@ -511,6 +639,7 @@ class LocalImageProcessingService:
                     },
                 },
             )
+            return {**registered, "verification": artifact.metadata.get("verification")}
         finally:
             temporary.unlink(missing_ok=True)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from .events import AgentEvent, AgentEventType, CancellationToken
 from .models import (
     AssistantMessage,
     Message,
+    SystemMessage,
     TextContent,
     ToolCall,
     ToolResult,
@@ -120,6 +122,7 @@ class AgentLoop:
         runtime = AgentLoopRuntime(self._profile, self._tools)
         started_at = time.monotonic()
         async_wait_calls: set[str] = set()
+        format_corrections = 0
         await self._emit(AgentEventType.AGENT_START)
         try:
             turn = 0
@@ -129,8 +132,31 @@ class AgentLoop:
                 cancellation.raise_if_cancelled()
                 await self._emit(AgentEventType.TURN_START, turn=turn)
                 assistant = await self._run_provider_turn(
-                    tuple(transcript), cancellation, started_at, runtime
+                    tuple(transcript),
+                    cancellation,
+                    started_at,
+                    runtime,
+                    require_native_tool_call=format_corrections == 1,
                 )
+                if _looks_like_text_tool_json(assistant, runtime.tools):
+                    transcript.append(assistant)
+                    if format_corrections == 0:
+                        format_corrections = 1
+                        transcript.append(
+                            SystemMessage(
+                                "Use the native Tool Call channel now. Do not output Tool JSON as text. "
+                                "Reuse the same requested Tool name and parameters."
+                            )
+                        )
+                        continue
+                    stable = AssistantMessage(
+                        (TextContent("The requested tool call could not be formatted safely. Please try again."),)
+                    )
+                    transcript.pop()  # malformed second text envelope
+                    transcript.pop()  # ephemeral correction instruction
+                    transcript.append(stable)
+                    await self._emit(AgentEventType.TURN_END, turn=turn)
+                    return tuple(transcript)
                 transcript.append(assistant)
                 if assistant.stop_reason in {"error", "aborted"}:
                     await self._emit(AgentEventType.TURN_END, turn=turn)
@@ -138,6 +164,7 @@ class AgentLoop:
 
                 calls = tuple(block for block in assistant.content if isinstance(block, ToolCall))
                 results: list[ToolResultMessage] = []
+                suspended = False
                 for call in calls:
                     self._check_deadline(started_at)
                     cancellation.raise_if_cancelled()
@@ -153,6 +180,11 @@ class AgentLoop:
                     result = await self._execute_tool(
                         assistant, call, tuple(transcript), cancellation, started_at, runtime.tools
                     )
+                    if _is_awaiting_ui_action(result):
+                        # This is a desktop control event. The original Tool
+                        # Call remains open until approval resolves it.
+                        suspended = True
+                        continue
                     transcript.append(result)
                     results.append(result)
                 await self._emit(
@@ -160,6 +192,8 @@ class AgentLoop:
                     turn=turn,
                     tool_result_ids=[result.id for result in results],
                 )
+                if suspended:
+                    return tuple(transcript)
                 additions = await _maybe_await(self._config.get_steering_messages)
                 if not calls and not additions:
                     additions = await _maybe_await(self._config.get_follow_up_messages)
@@ -182,6 +216,8 @@ class AgentLoop:
         cancellation: CancellationToken,
         started_at: float,
         runtime: AgentLoopRuntime,
+        *,
+        require_native_tool_call: bool = False,
     ) -> AssistantMessage:
         final_message: AssistantMessage | None = None
         request = ModelRequest(
@@ -200,6 +236,7 @@ class AgentLoop:
             ),
             temperature=self._config.temperature,
             max_output_tokens=self._config.max_output_tokens,
+            tool_choice="required" if require_native_tool_call else None,
         )
         request_override = await self._await_controlled(
             _maybe_await(self._config.before_provider_request, request, cancellation),
@@ -231,7 +268,6 @@ class AgentLoop:
                 ):
                     _require_visible_terminal_response(message)
                     final_message = message
-                    await self._emit(AgentEventType.MESSAGE_END, message=message.to_dict())
                 else:
                     await self._emit(
                         AgentEventType.MESSAGE_UPDATE, provider_event=provider_event.to_dict()
@@ -252,6 +288,7 @@ class AgentLoop:
         )
         if response_override is not None:
             final_message = response_override
+        await self._emit(AgentEventType.MESSAGE_END, message=final_message.to_dict())
         return cast(AssistantMessage, final_message)
 
     async def _execute_tool(
@@ -319,8 +356,9 @@ class AgentLoop:
             result=result.to_dict(),
         )
         message = ToolResultMessage(call.id, call.name, result)
-        await self._emit(AgentEventType.MESSAGE_START, message=message.to_dict())
-        await self._emit(AgentEventType.MESSAGE_END, message=message.to_dict())
+        if not _is_awaiting_ui_action(message):
+            await self._emit(AgentEventType.MESSAGE_START, message=message.to_dict())
+            await self._emit(AgentEventType.MESSAGE_END, message=message.to_dict())
         return message
 
     async def _blocked_tool_result(self, call: ToolCall, reason: str) -> ToolResultMessage:
@@ -437,6 +475,30 @@ def _async_wait_key(call: ToolCall, fallback: str) -> str | None:
         job_id = call.arguments.get("job_id")
         return f"job:{job_id}" if isinstance(job_id, str) and job_id else fallback
     return fallback if call.name in _ASYNC_WAIT_TOOL_NAMES else None
+
+
+def _is_awaiting_ui_action(message: ToolResultMessage) -> bool:
+    details = message.result.details
+    return isinstance(details, dict) and details.get("status") == "awaiting_ui_action"
+
+
+def _looks_like_text_tool_json(message: AssistantMessage, tools: ToolRegistry) -> bool:
+    """Recognize a likely Tool envelope but never execute text as a Tool Call."""
+
+    if any(isinstance(block, ToolCall) for block in message.content):
+        return False
+    text = "".join(block.text for block in message.content if isinstance(block, TextContent)).strip()
+    if not text.startswith("{") or not text.endswith("}"):
+        return False
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    name = payload.get("name") or payload.get("tool_name")
+    arguments = payload.get("arguments")
+    return isinstance(name, str) and name in {tool.name for tool in tools.all()} and isinstance(arguments, dict)
 
 
 def _require_visible_terminal_response(message: AssistantMessage) -> None:

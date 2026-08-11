@@ -5,12 +5,15 @@ import {
   Cube,
   File,
   ImageSquare,
+  MinusCircle,
   SpinnerGap,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ApiClient, AssetDto } from "../../shared/api/client";
+import type { ApiClient, AssetDto, AssetImpactDto } from "../../shared/api/client";
+import { HostClient } from "../../shared/host/client";
 import { readablePrompt } from "../../shared/prompts/promptDocument";
+import { AssetFileActions } from "./AssetFileActions";
 import "./asset-browser.css";
 
 const IMAGE_ASSET_TYPES = new Set([
@@ -48,6 +51,7 @@ const MAX_PROMPT_CACHE_CHARS = 2_000_000;
 const assetScrollPositions = new Map<string, number>();
 
 type AssetFilter = "all" | "image" | "prompt" | "model";
+type AssetColumns = 3 | 4 | 5 | 6 | 7 | 8;
 
 const ASSET_FILTERS: Array<{ id: AssetFilter; label: string }> = [
   { id: "all", label: "全部" },
@@ -55,6 +59,8 @@ const ASSET_FILTERS: Array<{ id: AssetFilter; label: string }> = [
   { id: "prompt", label: "Prompt" },
   { id: "model", label: "3D 资产" },
 ];
+const ASSET_COLUMN_OPTIONS: AssetColumns[] = [3, 4, 5, 6, 7, 8];
+const ASSET_LAYOUT_STORAGE_KEY = "pic2model.asset-library-layout";
 
 function matchesAssetFilter(asset: AssetDto, filter: AssetFilter) {
   if (filter === "all") return true;
@@ -70,6 +76,95 @@ function newestFirst(left: AssetDto, right: AssetDto) {
   const safeRightTime = Number.isNaN(rightTime) ? Number.NEGATIVE_INFINITY : rightTime;
   if (safeLeftTime !== safeRightTime) return safeRightTime - safeLeftTime;
   return right.id.localeCompare(left.id);
+}
+
+function preferredDuplicate(left: AssetDto, right: AssetDto) {
+  if (left.is_current !== right.is_current) return left.is_current ? left : right;
+  const leftPixels = typeof left.metadata.width === "number" && typeof left.metadata.height === "number"
+    ? left.metadata.width * left.metadata.height
+    : 0;
+  const rightPixels = typeof right.metadata.width === "number" && typeof right.metadata.height === "number"
+    ? right.metadata.width * right.metadata.height
+    : 0;
+  if (leftPixels !== rightPixels) return leftPixels > rightPixels ? left : right;
+  return newestFirst(left, right) <= 0 ? left : right;
+}
+
+const HEX_BIT_COUNTS = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4];
+const MAX_VISUAL_DISTANCE = 0.08;
+
+function visualFingerprintsMatch(left: string, right: string) {
+  if (left.length !== right.length || left.length === 0) return false;
+  const maxDifferentBits = Math.floor(left.length * 4 * MAX_VISUAL_DISTANCE);
+  let differentBits = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftNibble = Number.parseInt(left[index], 16);
+    const rightNibble = Number.parseInt(right[index], 16);
+    if (!Number.isFinite(leftNibble) || !Number.isFinite(rightNibble)) return false;
+    const difference = leftNibble ^ rightNibble;
+    differentBits += HEX_BIT_COUNTS[difference];
+    if (differentBits > maxDifferentBits) return false;
+  }
+  return true;
+}
+
+function uniqueAssetsByContent(assets: AssetDto[]) {
+  type AssetGroup = { representative: AssetDto };
+  const groups: AssetGroup[] = [];
+  const contentGroups = new Map<string, AssetGroup>();
+  const visualGroups = new Map<number, Array<{
+    aspectRatio: number;
+    fingerprint: string;
+    group: AssetGroup;
+  }>>();
+  for (const asset of assets) {
+    const contentHash = typeof asset.sha256 === "string" ? asset.sha256.trim() : "";
+    const visualFingerprint = typeof asset.visual_fingerprint === "string"
+      ? asset.visual_fingerprint.trim().toLowerCase()
+      : "";
+    const aspectRatio = typeof asset.visual_aspect_ratio === "number"
+      ? asset.visual_aspect_ratio
+      : null;
+    let group = contentHash ? contentGroups.get(contentHash) : undefined;
+    if (!group && visualFingerprint && aspectRatio != null) {
+      const bucket = Math.round(aspectRatio * 25);
+      group = visualGroups.get(bucket)?.find((candidate) => (
+        Math.abs(candidate.aspectRatio - aspectRatio) <= 0.025
+        && visualFingerprintsMatch(candidate.fingerprint, visualFingerprint)
+      ))?.group;
+    }
+    if (group) {
+      group.representative = preferredDuplicate(group.representative, asset);
+      if (contentHash) contentGroups.set(contentHash, group);
+      continue;
+    }
+    group = { representative: asset };
+    groups.push(group);
+    if (contentHash) contentGroups.set(contentHash, group);
+    if (visualFingerprint && aspectRatio != null) {
+      const bucket = Math.round(aspectRatio * 25);
+      const candidates = visualGroups.get(bucket) ?? [];
+      candidates.push({ aspectRatio, fingerprint: visualFingerprint, group });
+      visualGroups.set(bucket, candidates);
+    }
+  }
+  return groups.map((group) => group.representative);
+}
+
+function initialAssetColumns(): AssetColumns {
+  try {
+    const saved = window.localStorage.getItem(ASSET_LAYOUT_STORAGE_KEY);
+    if (saved === "3" || saved === "4" || saved === "5" || saved === "6" || saved === "7" || saved === "8") {
+      return Number(saved) as AssetColumns;
+    }
+    // Migrate preferences saved by the previous three-density control.
+    if (saved === "comfortable") return 3;
+    if (saved === "compact") return 4;
+    if (saved === "dense") return 6;
+  } catch {
+    // WebView storage can be unavailable for an isolated profile; the default remains usable.
+  }
+  return 4;
 }
 
 function requestId() {
@@ -359,21 +454,25 @@ function AssetCard({
   previewAssetId,
   projectId,
   api,
+  host,
   readOnly,
   focused,
   registerElement,
   onUseImage,
   onOpenModel,
+  onRemove,
 }: {
   asset: AssetDto;
   previewAssetId: string | null;
   projectId: string;
   api: ApiClient;
+  host: Pick<HostClient, "chooseExportDirectory">;
   readOnly: boolean;
   focused: boolean;
   registerElement(element: HTMLElement | null): void;
   onUseImage(asset: AssetDto): Promise<void>;
   onOpenModel(assetId: string): void;
+  onRemove(asset: AssetDto, impactToken: string): Promise<void>;
 }) {
   const image = IMAGE_ASSET_TYPES.has(asset.asset_type);
   const prompt = asset.asset_type === "prompt";
@@ -388,6 +487,8 @@ function AssetCard({
   } = usePromptPreview(api, projectId, asset.id, prompt && nearViewport);
   const [promptExpanded, setPromptExpanded] = useState(false);
   const [actionState, setActionState] = useState<"idle" | "working" | "copied" | "error">("idle");
+  const [removeState, setRemoveState] = useState<"idle" | "checking" | "confirm" | "working" | "error">("idle");
+  const [removeImpact, setRemoveImpact] = useState<AssetImpactDto | null>(null);
   const resetTimer = useRef<number | null>(null);
   useEffect(() => () => {
     if (resetTimer.current != null) window.clearTimeout(resetTimer.current);
@@ -419,6 +520,14 @@ function AssetCard({
     ? `${asset.metadata.width} × ${asset.metadata.height}`
     : null;
   const readablePrompt = prompt ? promptContent(promptText) : "";
+  const removeImpactCount = (removeImpact?.children?.length ?? 0)
+    + (removeImpact?.incoming_links?.length ?? 0)
+    + (removeImpact?.active_tool_calls?.length ?? 0);
+  const removeMessage = removeState === "checking"
+    ? "正在检查资产引用…"
+    : removeState === "error"
+      ? "移除失败，资产与本地文件均未改动。"
+      : `本地文件将移入项目回收站${removeImpact?.is_current ? "，当前图片会被清空" : ""}${removeImpactCount ? `，并保留 ${removeImpactCount} 项引用记录` : ""}。`;
   const detail = image
     ? dimensions ?? "受管图片"
     : prompt
@@ -460,6 +569,7 @@ function AssetCard({
       </div>
 
       <div className="asset-card-actions">
+        <AssetFileActions projectId={projectId} asset={asset} api={api} host={host} />
         {image && (currentImage
           ? <span className="asset-current-label"><Check size={16} weight="bold" />当前图片</span>
           : <button
@@ -486,6 +596,48 @@ function AssetCard({
         {model && <button type="button" onClick={() => onOpenModel(asset.id)}>
           <ArrowSquareOut size={17} />查看 3D
         </button>}
+        <div className={`asset-remove-action${removeState !== "idle" ? " confirming" : ""}`}>
+          {removeState !== "idle" ? <>
+            <p role={removeState === "error" ? "alert" : undefined}>
+              {removeMessage}
+            </p>
+            <div>
+              <button
+                type="button"
+                className="danger"
+                disabled={readOnly || removeState === "checking" || removeState === "working" || !removeImpact}
+                onClick={() => {
+                  if (!removeImpact) return;
+                  setRemoveState("working");
+                  void onRemove(asset, removeImpact.impact_token).catch(() => setRemoveState("error"));
+                }}
+              >
+                {removeState === "checking" || removeState === "working"
+                  ? <SpinnerGap className="spin" size={16} />
+                  : <MinusCircle size={16} />}
+                确认移除
+              </button>
+              <button type="button" disabled={removeState === "working"} onClick={() => {
+                setRemoveImpact(null);
+                setRemoveState("idle");
+              }}>取消</button>
+            </div>
+          </> : <button
+            type="button"
+            className="asset-remove-button"
+            disabled={readOnly}
+            aria-label={`从资产库移除 ${asset.name}`}
+            onClick={() => {
+              setRemoveState("checking");
+              void api.assetImpact(projectId, asset.id).then((impact) => {
+                setRemoveImpact(impact);
+                setRemoveState("confirm");
+              }).catch(() => setRemoveState("error"));
+            }}
+          >
+            <MinusCircle size={17} />移除
+          </button>}
+        </div>
       </div>
     </article>
   );
@@ -496,26 +648,32 @@ export function AssetBrowser({
   api,
   readOnly,
   onCurrent,
+  onAssetRemoved = () => undefined,
   onOpenModel = () => undefined,
   focusAssetId,
+  host = new HostClient(),
 }: {
   projectId: string;
   api: ApiClient;
   readOnly: boolean;
   onCurrent(): void;
+  onAssetRemoved?(): void;
   onOpenModel?(assetId: string): void;
   focusAssetId?: string | null;
+  host?: Pick<HostClient, "chooseExportDirectory">;
 }) {
   const [assets, setAssets] = useState<AssetDto[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [removedNotice, setRemovedNotice] = useState<string | null>(null);
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const [filter, setFilter] = useState<AssetFilter>("all");
+  const [columns, setColumns] = useState<AssetColumns>(initialAssetColumns);
   const browserRef = useRef<HTMLElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const assetElements = useRef(new Map<string, HTMLElement>());
   const reload = useCallback(async () => {
     try {
-      setAssets(await api.assets(projectId));
+      setAssets(await api.assets(projectId, false, true));
       setNotice(null);
     } catch {
       setNotice("资产无法加载，请刷新本地服务后重试。");
@@ -538,12 +696,19 @@ export function AssetBrowser({
   }, [assets.length, focusAssetId, projectId]);
 
   const visibleAssets = useMemo(
-    () => assets
+    () => uniqueAssetsByContent(assets
       .filter((asset) => LIBRARY_ASSET_TYPES.has(asset.asset_type))
-      .filter((asset) => matchesAssetFilter(asset, filter))
+      .filter((asset) => matchesAssetFilter(asset, filter)))
       .sort(newestFirst),
     [assets, filter],
   );
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(ASSET_LAYOUT_STORAGE_KEY, String(columns));
+    } catch {
+      // The selected layout still applies for the current session.
+    }
+  }, [columns]);
   const previewByModel = useMemo(() => {
     const result = new Map<string, string>();
     for (const asset of assets) {
@@ -596,6 +761,18 @@ export function AssetBrowser({
     }
   };
 
+  const removeAsset = async (asset: AssetDto, impactToken: string) => {
+    await api.trashAsset(
+      projectId,
+      asset.id,
+      impactToken,
+      `asset-remove-${crypto.randomUUID()}`,
+    );
+    setAssets((current) => current.filter((item) => item.id !== asset.id));
+    setRemovedNotice(`已移除 ${asset.name}；本地文件已移入项目回收站。`);
+    if (asset.is_current) onAssetRemoved();
+  };
+
   return (
     <section
       ref={browserRef}
@@ -609,23 +786,40 @@ export function AssetBrowser({
           <h1 id="asset-browser-title">Assets</h1>
         </div>
       </header>
-      <div className="asset-filters" role="group" aria-label="资产类型筛选">
-        {ASSET_FILTERS.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            aria-pressed={filter === option.id}
-            onClick={() => {
-              setFilter(option.id);
-              setVisibleLimit(PAGE_SIZE);
-            }}
-          >
-            {option.label}
-          </button>
-        ))}
+      <div className="asset-toolbar">
+        <div className="asset-filters" role="group" aria-label="资产类型筛选">
+          {ASSET_FILTERS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              aria-pressed={filter === option.id}
+              onClick={() => {
+                setFilter(option.id);
+                setVisibleLimit(PAGE_SIZE);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <div className="asset-layout-options" role="group" aria-label="资产排列设置">
+          <span>每行</span>
+          {ASSET_COLUMN_OPTIONS.map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-label={`每行 ${option} 个资产`}
+              aria-pressed={columns === option}
+              onClick={() => setColumns(option)}
+            >
+              {option} 列
+            </button>
+          ))}
+        </div>
       </div>
       {notice && <p className="asset-notice" role="status"><WarningCircle size={18} />{notice}</p>}
-      <div className="asset-list">
+      {removedNotice && <p className="asset-notice success" role="status"><Check size={18} />{removedNotice}</p>}
+      <div className="asset-list" data-columns={columns}>
         {visibleAssets.slice(0, visibleLimit).map((asset) => (
           <AssetCard
             key={asset.id}
@@ -633,6 +827,7 @@ export function AssetBrowser({
             previewAssetId={previewByModel.get(asset.id) ?? null}
             projectId={projectId}
             api={api}
+            host={host}
             readOnly={readOnly}
             focused={asset.id === focusAssetId}
             registerElement={(element) => {
@@ -641,6 +836,7 @@ export function AssetBrowser({
             }}
             onUseImage={useImage}
             onOpenModel={onOpenModel}
+            onRemove={removeAsset}
           />
         ))}
       </div>

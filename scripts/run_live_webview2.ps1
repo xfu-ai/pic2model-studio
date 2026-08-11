@@ -33,9 +33,31 @@ function Wait-Http([string]$Url, [int]$Seconds) {
     throw "Timed out waiting for $Url"
 }
 
-try {
-    Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$DebugPort/json/list" -TimeoutSec 2 |
-        Out-Null
+function Test-DebugEndpoint([int]$Port) {
+    foreach ($hostAddress in @("127.0.0.1", "[::1]")) {
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri "http://${hostAddress}:$Port/json/list" -TimeoutSec 2 |
+                Out-Null
+            return $true
+        } catch {
+            # WebView2 may bind its debugging endpoint to either loopback family.
+        }
+    }
+    return $false
+}
+
+function Wait-DebugEndpoint([int]$Port, [int]$Seconds) {
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    do {
+        if (Test-DebugEndpoint $Port) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    throw "Timed out waiting for the WebView2 debugging endpoint on port $Port"
+}
+
+if (Test-DebugEndpoint $DebugPort) {
     @{
         status = "already_running"
         debug_port = $DebugPort
@@ -43,8 +65,6 @@ try {
         session_root = $runRoot
     } | ConvertTo-Json
     exit 0
-} catch {
-    # A missing CDP endpoint means this launcher may start its own live host.
 }
 
 $configuration = @{
@@ -88,6 +108,7 @@ Remove-Item Env:AIPIC_CONTROLLED_E2E_APP_DATA -ErrorAction SilentlyContinue
 Remove-Item Env:AIPIC_CONTROLLED_E2E_FIXTURE_ROOT -ErrorAction SilentlyContinue
 Remove-Item Env:AIPIC_CONTROLLED_E2E_PROVIDER_FAILURE -ErrorAction SilentlyContinue
 Remove-Item Env:AIPIC_CONTROLLED_E2E_RENDERER_ORIGIN -ErrorAction SilentlyContinue
+$env:AIPIC_TO_MODEL_DEV_RENDERER_ORIGIN = "http://127.0.0.1:$DevPort"
 $workspacePython = Join-Path $repoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $workspacePython -PathType Leaf)) {
     throw "The workspace Python environment is missing."
@@ -102,7 +123,7 @@ $tauri = Start-Process -FilePath "pnpm.cmd" -ArgumentList @(
 ) -WorkingDirectory (Join-Path $repoRoot "desktop") -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput $tauriLog -RedirectStandardError $tauriError
 
-Wait-Http "http://127.0.0.1:$DebugPort/json/list" 180
+Wait-DebugEndpoint $DebugPort 180
 @{
     status = "started"
     debug_port = $DebugPort

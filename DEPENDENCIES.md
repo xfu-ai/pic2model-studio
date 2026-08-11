@@ -13,6 +13,9 @@
 | Python 3.14 | 本地 sidecar 运行时 | PyInstaller one-file 内嵌 |
 | ONNX Runtime 1.28.0 | 本地图片模型推理 | DLL/PYD 内嵌于 sidecar |
 | Real-ESRGAN x4 ONNX | 离线图片放大 | 模型内嵌于 sidecar，源码资源由 Git LFS 管理 |
+| Ollama 0.32.5 + Qwen3-VL 8B | 本地 Agent、图片理解和工具调用 | `resources/local-models/ollama`，Git LFS 管理 |
+| stable-diffusion.cpp + Z-Image-Turbo | 本地文生图 | `resources/local-models/z-image-turbo`，Git LFS 管理 |
+| CPython 3.11 + PyTorch + TripoSR | 本地单图生成 3D | `resources/local-models/triposr`，Git LFS 管理 |
 | Visual C++ Runtime | Python 与原生扩展运行 | DLL 内嵌于 sidecar |
 | Pillow、NumPy、FastAPI 等 Python 包 | 图片处理与本地 API | 内嵌于 sidecar |
 | React、Tauri API、model-viewer | 桌面界面与 3D 预览 | 编译进桌面应用 |
@@ -57,9 +60,14 @@ opener 插件、serde、image、screenshots、rand 和 Windows Job Object API。
 
 ## 大文件与 Git LFS
 
-以下文件类型通过 Git LFS 发布：`*.exe`、`*.dll`、`*.pyd`、`*.onnx`、
-`*.wasm`。克隆后必须执行 `git lfs pull`，否则便携应用和模型只会是 LFS
-指针文件。
+以下文件类型通过 Git LFS 发布：`*.exe`、`*.dll`、`*.pyd`、`*.lib`、
+`*.onnx`、`*.wasm`、`*.gguf`、`*.safetensors`、`*.ckpt`，以及无扩展名的
+Ollama 内容寻址模型 blob。克隆后必须执行 `git lfs pull`，否则便携应用和
+模型只会是 LFS 指针文件。
+
+`resources/local-models/` 是三个离线模型能力的规范资源源。便携构建从该
+目录复制资源；桌面 sidecar 也会自动解析该目录，不要求用户手动设置本地
+模型路径环境变量。
 
 ## 许可证与更新原则
 

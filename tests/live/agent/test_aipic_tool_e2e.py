@@ -11,6 +11,7 @@ import pytest
 
 from aipic_to_model.agent.core.events import CancellationToken
 from aipic_to_model.agent.integrations.runtime import AgentRuntime
+from aipic_to_model.agent.integrations.progressive_tools import PERMANENT_TOOL_NAMES
 from aipic_to_model.agent.providers.api.openai_completions import OpenAICompletionsProvider
 from aipic_to_model.agent.providers.base import ModelRequest
 from aipic_to_model.agent.providers.deepseek import create_deepseek_credential_resolver
@@ -35,7 +36,7 @@ class RecordingLiveProvider:
 @pytest.mark.agent
 @pytest.mark.live_llm
 @pytest.mark.asyncio
-async def test_deepseek_calls_fixed_facade_tool_end_to_end(tmp_path: Path) -> None:
+async def test_deepseek_calls_permanent_single_tool_end_to_end(tmp_path: Path) -> None:
     """Exercise live model -> AgentRuntime -> AIPic registry -> SQLite audit -> response.
 
     The chosen Tool is read-only and operates only on the pytest-created project, so this
@@ -69,7 +70,7 @@ async def test_deepseek_calls_fixed_facade_tool_end_to_end(tmp_path: Path) -> No
     await runtime.send(
         project.id,
         conversation_id,
-        "Call inspect_workspace exactly once with view=summary. Do not pass a project ID. "
+        "Call project.get_state exactly once with no arguments. Do not pass a project ID. "
         "After receiving the tool result, reply exactly PROJECT_STATE_OK.",
         wait=True,
     )
@@ -98,33 +99,22 @@ async def test_deepseek_calls_fixed_facade_tool_end_to_end(tmp_path: Path) -> No
     tool_call = next(block for block in tool_call_message["content"] if block["type"] == "tool_call")
     tool_result = next(item for item in messages if item["role"] == "tool_result")
     assert tool_result["tool_call_id"] == tool_call["id"]
-    assert tool_result["tool_name"] == "inspect_workspace"
+    assert tool_result["tool_name"] == "project.get_state"
     exposed_names = {
         str(item["function"]["name"])
         for request in provider.requests
         for item in request.tools
     }
-    assert len(provider.requests) == 2
-    assert all(len(request.tools) == 15 for request in provider.requests)
-    assert exposed_names == {
-        "read",
-        "write",
-        "edit",
-        "bash",
-        "inspect_workspace",
-        "select_asset",
-        "analyze_image",
-        "prepare_prompt",
-        "generate_images",
-        "edit_image",
-        "split_image",
-        "prepare_multiview",
-        "generate_model3d",
-        "process_model3d",
-        "control_job",
-    }
-    assert tool_call["name"] == "inspect_workspace"
-    assert tool_call["arguments"] == {"view": "summary"}
+    executor_requests = [request for request in provider.requests if request.tools]
+    assert len(executor_requests) == 2
+    assert all(
+        tuple(str(item["function"]["name"]) for item in request.tools)
+        == PERMANENT_TOOL_NAMES
+        for request in executor_requests
+    )
+    assert exposed_names == set(PERMANENT_TOOL_NAMES)
+    assert tool_call["name"] == "project.get_state"
+    assert tool_call["arguments"] == {}
     assert call is not None
     assert call["tool_name"] == "project.get_state"
     assert call["status"] == "succeeded"
@@ -136,7 +126,7 @@ async def test_deepseek_calls_fixed_facade_tool_end_to_end(tmp_path: Path) -> No
         item
         for item in events
         if item["event_type"] == "tool.completed"
-        and item["payload"].get("tool_name") == "inspect_workspace"
+        and item["payload"].get("tool_name") == "project.get_state"
     )
     assert completed_event["payload"].get("is_error") is False
     assert completed_event["payload"]["result"]["content"]
@@ -147,10 +137,10 @@ async def test_deepseek_calls_fixed_facade_tool_end_to_end(tmp_path: Path) -> No
         json.dumps(
             {
                 "provider": "deepseek",
-                "scenario": "agent_runtime_fixed_fifteen_facade",
-                "model_tool_name": "inspect_workspace",
+                "scenario": "agent_runtime_permanent_single_tool",
+                "model_tool_name": "project.get_state",
                 "internal_tool_name": "project.get_state",
-                "exposed_tool_count": len(provider.requests[0].tools),
+                "exposed_tool_count": len(executor_requests[0].tools),
                 "exposed_tool_names": sorted(exposed_names),
                 "tool_status": call["status"],
                 "turn_count": sum(item["role"] == "assistant" for item in messages),

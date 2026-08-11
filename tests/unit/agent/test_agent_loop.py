@@ -54,6 +54,15 @@ class RecordingTool:
         return result
 
 
+@dataclass
+class AwaitApprovalTool(RecordingTool):
+    async def execute(
+        self, tool_call_id, arguments, context: ToolContext, cancellation, on_update=None
+    ):
+        del tool_call_id, arguments, context, cancellation, on_update
+        return ToolResult((TextContent("Approval required."),), details={"status": "awaiting_ui_action"})
+
+
 def assistant(*content, stop_reason="stop") -> AssistantMessage:
     return AssistantMessage(tuple(content), stop_reason=stop_reason)
 
@@ -85,6 +94,80 @@ async def test_plain_text_turn_finishes_with_agent_end() -> None:
 
     assert isinstance(transcript[-1], AssistantMessage)
     assert [event.type for event in loop.events][-1] is AgentEventType.AGENT_END
+
+
+@pytest.mark.agent
+@pytest.mark.asyncio
+async def test_provider_response_transform_is_the_persisted_message_end() -> None:
+    async def transform(_message: AssistantMessage, _cancellation: CancellationToken):
+        return AssistantMessage((TextContent("grounded final"),))
+
+    loop = make_loop(
+        [assistant(TextContent("unsupported claim"))],
+        after_provider_response=transform,
+    )
+
+    transcript = await loop.run((UserMessage("go"),), CancellationToken())
+
+    assert transcript[-1].content[0].text == "grounded final"
+    message_end = next(
+        event
+        for event in loop.events
+        if event.type is AgentEventType.MESSAGE_END
+        and isinstance(event.payload.get("message"), dict)
+        and event.payload["message"].get("role") == "assistant"
+    )
+    assert message_end.payload["message"]["content"][0]["text"] == "grounded final"
+
+
+@pytest.mark.agent
+@pytest.mark.asyncio
+async def test_text_tool_json_is_not_executed_and_one_native_format_correction_is_requested() -> None:
+    order: list[str] = []
+    tool = RecordingTool(
+        "echo",
+        order,
+        {"type": "object", "required": ["value"], "properties": {"value": {"type": "integer"}}},
+    )
+    loop = make_loop(
+        [
+            assistant(TextContent('{"name":"echo","arguments":{"value":7}}')),
+            assistant(ToolCall("native-call", "echo", {"value": 7}), stop_reason="tool_use"),
+            assistant(TextContent("done")),
+        ],
+        [tool],
+    )
+
+    await loop.run((UserMessage("go"),), CancellationToken())
+
+    fake = loop._provider
+    assert isinstance(fake, FakeProvider)
+    assert order == ["echo:7"]
+    assert fake.requests[1].tool_choice == "required"
+
+
+@pytest.mark.agent
+@pytest.mark.asyncio
+async def test_repeated_text_tool_json_returns_a_stable_error_without_executing_it() -> None:
+    order: list[str] = []
+    tool = RecordingTool(
+        "echo",
+        order,
+        {"type": "object", "required": ["value"], "properties": {"value": {"type": "integer"}}},
+    )
+    loop = make_loop(
+        [
+            assistant(TextContent('{"name":"echo","arguments":{"value":7}}')),
+            assistant(TextContent('{"name":"echo","arguments":{"value":7}}')),
+        ],
+        [tool],
+    )
+
+    transcript = await loop.run((UserMessage("go"),), CancellationToken())
+
+    assert order == []
+    assert isinstance(transcript[-1], AssistantMessage)
+    assert "could not be formatted safely" in transcript[-1].content[0].text
 
 
 @pytest.mark.agent
@@ -132,6 +215,23 @@ async def test_two_calls_from_one_assistant_message_run_in_source_order() -> Non
     await loop.run((UserMessage("go"),), CancellationToken())
 
     assert order == ["one:1", "two:2"]
+
+
+@pytest.mark.agent
+@pytest.mark.asyncio
+async def test_approval_sideband_leaves_the_original_tool_call_open_without_a_tool_result_message() -> None:
+    tool = AwaitApprovalTool("paid", [], {"type": "object", "properties": {}})
+    loop = make_loop([assistant(ToolCall("approval-call", "paid", {}), stop_reason="tool_use")], [tool])
+
+    transcript = await loop.run((UserMessage("go"),), CancellationToken())
+
+    assert [message.role for message in transcript] == ["user", "assistant"]
+    assert not any(
+        event.type is AgentEventType.MESSAGE_END
+        and isinstance(event.payload.get("message"), dict)
+        and event.payload["message"].get("role") == "tool_result"
+        for event in loop.events
+    )
 
 
 @pytest.mark.agent

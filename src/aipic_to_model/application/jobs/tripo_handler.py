@@ -49,6 +49,8 @@ def handle_submission_result(result: ProviderResult) -> TripoSubmissionDecision:
         external_task_id = result.payload.get("external_task_id")
         if isinstance(external_task_id, str) and external_task_id:
             return TripoSubmissionDecision(external_task_id, ResumeClass.REMOTE_POLL, False)
+    if result.error is not None and result.error.code != "JOB_UNKNOWN_SUBMISSION":
+        return TripoSubmissionDecision(None, ResumeClass.MANUAL_REVIEW, False)
     return TripoSubmissionDecision(None, ResumeClass.UNKNOWN_SUBMISSION, True)
 
 
@@ -98,6 +100,16 @@ def persist_submission_result(
             provider=provider,
             external_task_id=decision.external_task_id,
             submission_summary=submission_summary,
+        )
+        return decision
+    if result.error is not None and result.error.code != "JOB_UNKNOWN_SUBMISSION":
+        store.update(
+            database,
+            job_id=job_id,
+            target=JobStatus.INTERRUPTED if result.retryable else JobStatus.FAILED,
+            stage=JobStage.CREATING,
+            resume_class=ResumeClass.MANUAL_REVIEW,
+            error=result.error.model_dump(mode="json"),
         )
         return decision
     # A lost create response is ambiguous even when the transport calls it retryable.
@@ -248,17 +260,12 @@ class TripoLifecycleHandler:
         request = TripoGenerationRequest.model_validate(context["arguments"])
         if request.mode == "multiview":
             members = {name: request.view_asset_ids[name] for name in ("front", "side", "back")}
-            confirmed_set_id: str | None = None
-            if self._multiview_repository is not None:
-                if self._multiview_repository.is_ready_for_submission(
+            if (
+                self._multiview_repository is None
+                or not self._multiview_repository.is_ready_for_submission(
                     database, set_id=request.multiview_set_id or "", members=members
-                ):
-                    confirmed_set_id = request.multiview_set_id
-                else:
-                    confirmed_set_id = self._multiview_repository.confirmed_set_for_members(
-                        database, members=members
-                    )
-            if confirmed_set_id is None:
+                )
+            ):
                 return self._jobs.update(
                     database,
                     job_id=job.id,
@@ -275,10 +282,6 @@ class TripoLifecycleHandler:
                         "safe_to_retry": False,
                         "recommended_action": "fix_input",
                     },
-                )
-            if confirmed_set_id != request.multiview_set_id:
-                request = request.model_copy(
-                    update={"multiview_set_id": confirmed_set_id}
                 )
         asset_ids = (
             [request.image_asset_id]

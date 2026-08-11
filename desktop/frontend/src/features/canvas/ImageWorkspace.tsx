@@ -15,7 +15,9 @@ import type {
   AssetDto,
   WorkspaceMode,
 } from "../../shared/api/client";
+import { HostClient } from "../../shared/host/client";
 import { CanvasContextToolbar } from "./CanvasContextToolbar";
+import { AssetFileActions } from "../assets/AssetFileActions";
 import { CaptureScreenAction } from "../assets/CaptureScreenAction";
 import { ImportImageAction } from "../assets/ImportImageAction";
 import "./image-workspace.css";
@@ -45,11 +47,15 @@ export function ImageWorkspace({
   api,
   onModeChange,
   onModelJobQueued,
+  onCurrentAssetChange,
+  host = new HostClient(),
 }: {
   projectId: string;
   api: ApiClient;
   onModeChange(mode: WorkspaceMode): void;
   onModelJobQueued?(jobId: string): void;
+  onCurrentAssetChange?(): void;
+  host?: Pick<HostClient, "chooseExportDirectory">;
 }) {
   const [assets, setAssets] = useState<AssetDto[]>([]);
   const [familyAssetIds, setFamilyAssetIds] = useState<Set<string>>(new Set());
@@ -303,8 +309,14 @@ export function ImageWorkspace({
           referenceAvailable={previewableAssets.length >= 1}
           onModeChange={onModeChange}
           onModelJobQueued={onModelJobQueued}
+          onLocalImageCompleted={(assetId) => {
+            setSelectedAssetId(assetId);
+            setAssetRevision((value) => value + 1);
+            onCurrentAssetChange?.();
+          }}
         />
         <div className="image-capture-action">
+          {asset && <AssetFileActions projectId={projectId} asset={asset} api={api} host={host} />}
           <ImportImageAction projectId={projectId} api={api} label="导入图片" onImported={() => setAssetRevision((value) => value + 1)} />
           <CaptureScreenAction projectId={projectId} api={api} onImported={() => setAssetRevision((value) => value + 1)} />
         </div>
@@ -324,6 +336,7 @@ export function ImageWorkspace({
           <img
             src={source}
             alt={asset?.name ?? "Current asset"}
+            data-managed-asset-id={asset?.id}
             className={fit ? "fit" : ""}
             draggable={false}
             style={

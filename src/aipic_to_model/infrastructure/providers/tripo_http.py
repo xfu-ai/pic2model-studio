@@ -94,16 +94,21 @@ def _nested(data: dict[str, Any], *paths: tuple[str, ...]) -> Any:
 
 
 def _status_result(response: httpx.Response, operation: str) -> ProviderResult | None:
-    if 200 <= response.status_code < 300:
-        return None
     data = _json_object(response)
     provider_code = data.get("code") if data is not None else None
+    provider_rejected = provider_code not in {None, 0, "0"}
+    if 200 <= response.status_code < 300 and not provider_rejected:
+        return None
     return http_failure(
         operation=operation,
         status_code=response.status_code,
         request_id=_request_id(response),
         retry_after_seconds=_retry_after(response),
-        credits_exhausted=provider_code == 2010,
+        credits_exhausted=provider_code in {2010, "2010"},
+        request_invalid=(
+            (200 <= response.status_code < 300 and provider_rejected)
+            or response.status_code in {400, 422}
+        ),
     )
 
 

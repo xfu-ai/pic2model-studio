@@ -96,11 +96,29 @@
 }
 
 .image-capture-action {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-4) var(--space-1) var(--space-2);
   border-left: var(--border-subtle);
+}
+
+.image-capture-action > .asset-file-actions {
+  padding-right: var(--space-2);
+  border-right: var(--border-subtle);
+}
+
+.image-capture-action .asset-file-feedback {
+  position: absolute;
+  right: var(--space-4);
+  bottom: calc(-1 * var(--space-5));
+  z-index: 2;
+  border: var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-card);
 }
 
 .image-capture-action .import-image-action {
@@ -251,6 +269,75 @@
 }
 
 .external-transfer-error {
+  margin-top: var(--space-3) !important;
+  color: var(--color-danger) !important;
+}
+
+.local-image-size-backdrop {
+  z-index: 20;
+}
+
+.local-image-size-dialog {
+  width: min(560px, 100%);
+}
+
+.local-image-size-dialog .eyebrow {
+  margin: 0 0 var(--space-2);
+  color: var(--color-accent);
+  font-size: var(--font-tiny);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.local-image-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.local-image-mode button[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 18%, var(--color-surface-raised));
+  color: var(--color-text);
+}
+
+.local-image-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.local-image-fields label {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--font-small);
+}
+
+.local-image-fields input,
+.local-image-fields select {
+  min-width: 0;
+  min-height: 38px;
+}
+
+.local-image-fields .local-image-checkbox {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.local-image-fields .local-image-checkbox input {
+  min-height: auto;
+}
+
+.local-image-note {
+  grid-column: 1 / -1;
+}
+
+.local-image-error {
   margin-top: var(--space-3) !important;
   color: var(--color-danger) !important;
 }

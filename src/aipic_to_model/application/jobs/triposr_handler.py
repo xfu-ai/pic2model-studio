@@ -26,7 +26,7 @@ TRIPOSR_MODEL = "stabilityai/TripoSR"
 @dataclass(frozen=True)
 class TripoSRLocalSettings:
     chunk_size: int = 8192
-    marching_cubes_resolution: int = 256
+    marching_cubes_resolution: int = 512
     foreground_ratio: float = 0.85
     timeout_seconds: float = 900.0
 

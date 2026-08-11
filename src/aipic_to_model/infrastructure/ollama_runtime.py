@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from .local_inference import normalize_loopback_base_url
+from .local_model_resources import resolve_local_model_resource
 
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_CONTEXT_LENGTH = 32_768
@@ -69,6 +70,9 @@ def discover_ollama_executable(explicit: str | None = None) -> Path | None:
         candidates.append(Path(command))
 
     executable_name = "ollama.exe" if os.name == "nt" else "ollama"
+    bundled = resolve_local_model_resource(Path("ollama/runtime") / executable_name)
+    if bundled is not None:
+        candidates.append(bundled)
     executable = Path(sys.executable).resolve()
     candidates.extend(
         (
@@ -126,6 +130,10 @@ def discover_ollama_models_directory(explicit: str | None = None) -> Path | None
     )
     if configured:
         candidates.append(Path(configured))
+
+    bundled = resolve_local_model_resource(Path("ollama/models"), directory=True)
+    if bundled is not None:
+        candidates.append(bundled)
 
     executable = Path(sys.executable).resolve()
     candidates.extend(
@@ -377,6 +385,9 @@ class OllamaRuntimeManager:
             except (OSError, RuntimeError, TypeError, ValueError):
                 return False
         parsed = urlsplit(self._server_url)
+        hostname = parsed.hostname
+        if hostname is None:
+            return False
         connection: http.client.HTTPConnection | http.client.HTTPSConnection
         connection_type = (
             http.client.HTTPSConnection
@@ -384,7 +395,7 @@ class OllamaRuntimeManager:
             else http.client.HTTPConnection
         )
         connection = connection_type(
-            parsed.hostname,
+            hostname,
             parsed.port,
             timeout=self._probe_timeout_seconds,
         )

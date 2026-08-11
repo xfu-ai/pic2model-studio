@@ -35,3 +35,8 @@ class AgentQueueMessageRequest(AgentConversationRequest):
 
 class ActivateSkillRequest(AgentConversationRequest):
     name: str = Field(min_length=1, max_length=200)
+
+
+class CompleteMultiviewActionRequest(AgentConversationRequest):
+    multiview_ref: str = Field(min_length=1, max_length=200)
+    view_asset_refs: dict[Literal["front", "side", "back"], Annotated[str, Field(min_length=1, max_length=200)]]

@@ -11,7 +11,7 @@ from .assets import AssetService
 from .ports import SelectionRepositoryPort
 from .projects import ProjectService
 from .selections import SelectionService
-from .tools import InMemoryJobSubmitter, JobSubmitter, ToolRegistry
+from .tools import JobSubmitter, ToolRegistry
 
 B01_TOOLS = (
     ("project.get_state", RiskLevel.READ_ONLY, "sync"),
@@ -170,7 +170,7 @@ def _success(
 
 def _executor(
     name: str,
-    job_submitter: JobSubmitter,
+    job_submitter: JobSubmitter | None,
     assets: AssetService,
     selections: SelectionService,
     projects: ProjectService,
@@ -349,6 +349,25 @@ def _executor(
                 canonical_json(annotation),
                 [annotation["id"]],
             )
+        if job_submitter is None:
+            return ToolResultV1(
+                False,
+                "failed",
+                call_id,
+                [],
+                "The project package exporter is available only through the desktop Export flow.",
+                [],
+                error={
+                    "code": "TOOL_NOT_AVAILABLE",
+                    "category": "api_not_configured",
+                    "user_message": "Use the desktop Export action to create a project package.",
+                    "recoverable": True,
+                    "failed_object": "tool_call",
+                    "failed_step": "dispatch",
+                    "safe_to_retry": False,
+                    "recommended_action": "use_desktop_export",
+                },
+            )
         job = job_submitter.submit(project_id, name, arguments)
         return ToolResultV1(
             True,
@@ -371,7 +390,6 @@ def register_b01_tools(
     selection_repository: SelectionRepositoryPort,
     job_submitter: JobSubmitter | None = None,
 ) -> None:
-    job_submitter = job_submitter or InMemoryJobSubmitter()
     directory = Path(__file__).with_name("tool_manifests")
     expected = {f"{name}@1.0.0.json" for name, _, _ in B01_TOOLS}
     actual = {path.name for path in directory.glob("*.json")}

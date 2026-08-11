@@ -1,15 +1,21 @@
 """Adapters from the framework-neutral Agent runtime to AIPic application services."""
 
 from .aipic_tools import AIPicToolAdapter, AIPicToolInvocation, available_aipic_tools
-from .facade_tools import FACADE_TOOL_NAMES, AIPicFacadeTool, facade_tools
+from .progressive_tools import (
+    BUSINESS_TOOL_NAMES,
+    MODEL_TOOL_NAMES,
+    PERMANENT_TOOL_NAMES,
+    build_progressive_tool_catalog,
+)
 from .runtime import AgentRuntime
 
 __all__ = [
-    "FACADE_TOOL_NAMES",
-    "AIPicFacadeTool",
     "AIPicToolAdapter",
     "AIPicToolInvocation",
     "AgentRuntime",
     "available_aipic_tools",
-    "facade_tools",
+    "BUSINESS_TOOL_NAMES",
+    "MODEL_TOOL_NAMES",
+    "PERMANENT_TOOL_NAMES",
+    "build_progressive_tool_catalog",
 ]

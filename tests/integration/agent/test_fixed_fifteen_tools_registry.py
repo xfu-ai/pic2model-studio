@@ -7,6 +7,11 @@ from PIL import Image
 
 from aipic_to_model.agent.core.events import CancellationToken
 from aipic_to_model.agent.core.tool import ToolContext
+from aipic_to_model.agent.integrations.progressive_tools import (
+    AGGREGATE_TOOL_NAMES,
+    MODEL_TOOL_NAMES,
+    PERMANENT_TOOL_NAMES,
+)
 from aipic_to_model.agent.integrations.runtime import AgentRuntime
 from aipic_to_model.application.host_capabilities import HostCapabilityStore
 from aipic_to_model.composition import compose_local_app
@@ -28,7 +33,7 @@ async def _execute(tool, call_id: str, arguments: dict[str, object]):
 async def test_fixed_tools_execute_against_real_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Exercise every model-visible Tool without contacting a live Provider."""
+    """Exercise representative single-operation Tools without a live Provider."""
 
     monkeypatch.setenv("AIPIC_CONTROLLED_E2E", "1")
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
@@ -78,8 +83,11 @@ async def test_fixed_tools_execute_against_real_registry(
     runtime = AgentRuntime(dependencies.registry, dependencies.root_for)
     created = runtime.create(project.id)
     conversation = runtime._conversations[(project.id, str(created["id"]))]
-    tools = {tool.name: tool for tool in conversation.harness.agent.state.tools}
-    assert len(tools) == 15
+    active_tools = {tool.name: tool for tool in conversation.harness.agent.state.tools}
+    assert tuple(active_tools) == PERMANENT_TOOL_NAMES
+    tools = {tool.name: tool for tool in conversation.harness._tool_catalog.all()}
+    assert tuple(tools) == MODEL_TOOL_NAMES
+    assert not set(AGGREGATE_TOOL_NAMES) & set(tools)
 
     write = await _execute(
         tools["write"],
@@ -108,101 +116,96 @@ async def test_fixed_tools_execute_against_real_registry(
     assert "fixed-15-bash" in bash.content[0].text
 
     results = {}
-    results["inspect_workspace"] = await _execute(
-        tools["inspect_workspace"], "inspect-call", {"view": "summary"}
+    results["project.get_state"] = await _execute(
+        tools["project.get_state"], "inspect-call", {}
     )
-    results["select_asset"] = await _execute(
-        tools["select_asset"],
+    results["asset.set_current"] = await _execute(
+        tools["asset.set_current"],
         "select-call",
         {
             "asset_ref": str(source["id"]),
             "reason": "The controlled workflow has exactly one selected source.",
         },
     )
-    results["analyze_image"] = await _execute(
-        tools["analyze_image"],
+    results["image.analyze_content"] = await _execute(
+        tools["image.analyze_content"],
         "analyze-call",
         {
             "source_asset_ref": str(source["id"]),
-            "analysis_type": "content",
         },
     )
-    results["understand_image"] = await _execute(
-        tools["understand_image"],
+    results["image.understand_for_agent"] = await _execute(
+        tools["image.understand_for_agent"],
         "understand-call",
         {
             "source_asset_ref": str(source["id"]),
             "question": "What is visible in this image?",
         },
     )
-    results["generate_images"] = await _execute(
-        tools["generate_images"],
+    results["image.generate_from_prompt_asset"] = await _execute(
+        tools["image.generate_from_prompt_asset"],
         "generate-images-call",
         {
-            "mode": "from_prompt",
             "prompt_asset_ref": str(prompt["id"]),
             "candidate_count": 2,
         },
     )
-    results["edit_image"] = await _execute(
-        tools["edit_image"],
+    results["image.remove_background_provider"] = await _execute(
+        tools["image.remove_background_provider"],
         "edit-image-call",
         {
-            "operation": "remove_background",
             "source_asset_ref": str(source["id"]),
         },
     )
-    results["split_image"] = await _execute(
-        tools["split_image"],
+    results["element.split_selection"] = await _execute(
+        tools["element.split_selection"],
         "split-call",
         {
             "source_asset_ref": str(source["id"]),
             "selection_ref": str(confirmed["id"]),
             "prompt_asset_ref": str(prompt["id"]),
-            "split_mode": "boxsplit",
         },
     )
-    results["prepare_multiview"] = await _execute(
-        tools["prepare_multiview"],
+    results["multiview.generate"] = await _execute(
+        tools["multiview.generate"],
         "multiview-call",
         {
-            "operation": "create",
             "source_asset_ref": str(source["id"]),
             "prompt_asset_ref": str(prompt["id"]),
         },
     )
-    results["generate_model3d"] = await _execute(
-        tools["generate_model3d"],
+    results["model3d.generate_from_image"] = await _execute(
+        tools["model3d.generate_from_image"],
         "generate-model-call",
         {
-            "mode": "image",
             "image_asset_ref": str(source["id"]),
             "parameters": {},
         },
     )
-    results["process_model3d"] = await _execute(
-        tools["process_model3d"],
+    results["model3d.inspect"] = await _execute(
+        tools["model3d.inspect"],
         "process-model-call",
-        {"operation": "inspect", "asset_refs": [str(model["id"])]},
+        {"asset_refs": [str(model["id"])]},
     )
-    analyze_job = results["analyze_image"].details["job"]["job_id"]
-    results["control_job"] = await _execute(
-        tools["control_job"],
+    analyze_job = results["image.analyze_content"].details["job"]["job_id"]
+    results["job.get_status"] = await _execute(
+        tools["job.get_status"],
         "control-job-call",
-        {"action": "status", "job_ref": str(analyze_job)},
+        {"job_ref": str(analyze_job)},
     )
 
-    assert set(results) == set(tools) - {"read", "write", "edit", "bash"}
     assert all(not result.is_error for result in results.values())
-    assert results["inspect_workspace"].details["status"] == "succeeded"
-    assert results["select_asset"].details["status"] == "succeeded"
-    assert results["control_job"].details["status"] == "succeeded"
-    assert results["analyze_image"].details["status"] == "queued"
-    assert results["understand_image"].details["status"] == "succeeded"
-    assert "Controlled image understanding" in results["understand_image"].content[0].text
-    assert results["edit_image"].details["status"] == "queued"
-    assert results["process_model3d"].details["status"] == "succeeded"
-    assert results["generate_images"].details["status"] == "awaiting_ui_action"
-    assert results["split_image"].details["status"] == "awaiting_ui_action"
-    assert results["prepare_multiview"].details["status"] == "awaiting_ui_action"
-    assert results["generate_model3d"].details["status"] == "awaiting_ui_action"
+    assert results["project.get_state"].details["status"] == "succeeded"
+    assert results["asset.set_current"].details["status"] == "succeeded"
+    assert results["job.get_status"].details["status"] == "succeeded"
+    assert results["image.analyze_content"].details["status"] == "queued"
+    assert results["image.understand_for_agent"].details["status"] == "succeeded"
+    assert "Controlled image understanding" in results["image.understand_for_agent"].content[0].text
+    assert results["image.remove_background_provider"].details["status"] == "queued"
+    assert results["model3d.inspect"].details["status"] == "succeeded"
+    assert results["model3d.inspect"].details["data"]["inspection"]["format"] == "glb"
+    assert '"inspection"' in results["model3d.inspect"].content[0].text
+    assert results["image.generate_from_prompt_asset"].details["status"] == "queued"
+    assert results["element.split_selection"].details["status"] == "awaiting_ui_action"
+    assert results["multiview.generate"].details["status"] == "awaiting_ui_action"
+    assert results["model3d.generate_from_image"].details["status"] == "queued"

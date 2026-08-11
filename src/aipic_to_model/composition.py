@@ -28,6 +28,7 @@ from .application.image_provider_routing import (
     ImageProviderRoute,
     PrioritizedImageGenerationProvider,
 )
+from .application.jobs.completion_broker import JobCompletionBroker
 from .application.jobs.configured_tripo import ConfiguredTripoJobHandler
 from .application.jobs.external_image_handler import ExternalImageJobHandler
 from .application.jobs.local_image_handler import LocalImageJobHandler
@@ -230,6 +231,7 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
         approvals,
         sync_dispatcher,
         local_capability=lambda name: name != "model3d.optimize" or optimization.capability().available,
+        multiview_repository=multiview_repository,
     )
     meshy_settings = MeshyImageSettings(
         base_url=os.environ.get("MESHY_BASE_URL", "https://api.meshy.ai"),
@@ -441,7 +443,6 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
         name: local_model_handler
         for name in (
             "model3d.import_local",
-            "model3d.render_preview",
             "model3d.convert",
             "model3d.optimize",
             "model3d.package",
@@ -480,7 +481,8 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
         tripo_handler.run,
     )
     handlers["model3d.download"] = tripo_handler.run
-    job_worker = ProductionJobWorker(jobs, handlers)
+    job_completion_broker = JobCompletionBroker(jobs)
+    job_worker = ProductionJobWorker(jobs, handlers, job_completion_broker)
     roots: dict[str, Path] = {}
     job_runner = BackgroundJobRunner(job_worker, roots)
     return AppDependencies(
@@ -506,6 +508,7 @@ def compose_local_app(capabilities: HostCapabilityStore, app_db: Path) -> AppDep
         job_recovery=JobRecoveryService(jobs),
         b02_runtime=b02_runtime,
         job_worker=job_worker,
+        job_completion_broker=job_completion_broker,
         roots=roots,
         job_runner=job_runner,
         image_provider_monitor=image_provider,

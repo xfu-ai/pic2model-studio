@@ -12,7 +12,7 @@ LOCAL_IMAGE_MODEL = "Z-Image-Turbo"
 LOCAL_MODEL3D_PROFILE = "model3d/local/triposr"
 LOCAL_MODEL3D_MODEL = "stabilityai/TripoSR"
 REMOTE_MODEL3D_PROFILE = "tripo3d/default"
-REMOTE_MODEL3D_MODEL = "tripo-v2.5-20250123"
+REMOTE_MODEL3D_MODEL = "v3.1-20260211"
 
 _BACKENDS = frozenset({"local", "remote", "auto"})
 
@@ -84,11 +84,15 @@ class GenerationPolicyResolver:
         backend = self._backend("model3d_generation_backend")
         if mode == "image" and backend in {"local", "auto"}:
             if self._refresh_local(LOCAL_MODEL3D_PROFILE):
+                parameters = arguments.get("parameters")
+                local_parameters = dict(parameters) if isinstance(parameters, dict) else {}
+                local_parameters.update(pbr=False, texture=True)
                 return ResolvedToolRequest(
                     {
                         **arguments,
                         "provider_profile": LOCAL_MODEL3D_PROFILE,
                         "model": LOCAL_MODEL3D_MODEL,
+                        "parameters": local_parameters,
                     },
                     RiskLevel.LOCAL_REVERSIBLE,
                 )

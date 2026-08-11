@@ -46,3 +46,9 @@ def test_external_paid_manifest_approval_requirements_are_frozen() -> None:
         "multiview.regenerate_view",
         "model3d.generate",
     }
+
+
+def test_preview_manifest_matches_its_synchronous_desktop_ui_action_boundary() -> None:
+    preview = next(item for item in B02_TOOLS if item[0] == "model3d.render_preview")
+    assert preview[2] == "sync"
+    assert preview[3] is False

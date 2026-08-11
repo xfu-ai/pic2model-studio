@@ -57,6 +57,18 @@ def test_external_providers_offline_do_not_disable_prompt_crop_or_glb_inspection
         "merge",
     )
     assert merged.status == "succeeded" and len(merged.output_asset_ids) == 1
+    loaded_prompt = dependencies.registry.execute(
+        root,
+        project.id,
+        "prompt.get_current",
+        "1.0.0",
+        {"prompt_asset_id": merged.output_asset_ids[0]},
+        "load-prompt",
+    )
+    prompt_payload = json.loads(loaded_prompt.summary)
+    assert prompt_payload["message"] == "Prompt loaded."
+    assert prompt_payload["prompt"]["zh_prompt"]
+    assert prompt_payload["prompt"]["en_prompt"]
 
     source = tmp_path / "source.png"
     Image.new("RGB", (8, 8), "red").save(source)
@@ -114,6 +126,10 @@ def test_external_providers_offline_do_not_disable_prompt_crop_or_glb_inspection
     assert inspected.status == "succeeded"
     assert inspected.job is None
     assert inspected.output_asset_ids == [model_id]
+    inspection_payload = json.loads(inspected.summary)
+    assert inspection_payload["message"] == "3D model inspected."
+    assert inspection_payload["inspection"]["format"] == "glb"
+    assert inspection_payload["inspection"]["parseable"] is True
 
     capabilities = dependencies.registry.visible(
         {"asset_types": ["glb"], "available_provider_profiles": []}

@@ -30,10 +30,11 @@ class ReadTool(_Tool):
                 "type": "object",
                 "required": ["path"],
                 "properties": {
-                    "path": {"type": "string"},
-                    "offset": {"type": "integer"},
-                    "limit": {"type": "integer"},
+                    "path": {"type": "string", "minLength": 1},
+                    "offset": {"type": "integer", "minimum": 1},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10_000},
                 },
+                "additionalProperties": False,
             },
         )
 
@@ -68,7 +69,11 @@ class WriteTool(_Tool):
             {
                 "type": "object",
                 "required": ["path", "content"],
-                "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                "properties": {
+                    "path": {"type": "string", "minLength": 1},
+                    "content": {"type": "string"},
+                },
+                "additionalProperties": False,
             },
         )
 
@@ -97,10 +102,11 @@ class EditTool(_Tool):
                 "type": "object",
                 "required": ["path", "old_text", "new_text"],
                 "properties": {
-                    "path": {"type": "string"},
-                    "old_text": {"type": "string"},
+                    "path": {"type": "string", "minLength": 1},
+                    "old_text": {"type": "string", "minLength": 1},
                     "new_text": {"type": "string"},
                 },
+                "additionalProperties": False,
             },
         )
 
@@ -131,10 +137,15 @@ class BashTool(_Tool):
                 "type": "object",
                 "required": ["command"],
                 "properties": {
-                    "command": {"type": "string"},
-                    "timeout": {"type": "number"},
-                    "cwd": {"type": "string"},
+                    "command": {"type": "string", "minLength": 1},
+                    "timeout": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 3600,
+                    },
+                    "cwd": {"type": "string", "minLength": 1},
                 },
+                "additionalProperties": False,
             },
         )
 

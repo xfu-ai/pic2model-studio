@@ -22,6 +22,9 @@ def test_approved_tripo_lifecycle_uploads_creates_gets_downloads_and_registers_g
     tmp_path: Path,
 ) -> None:
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
+    dependencies.settings.update_app(
+        dependencies.app_db, {"model3d_generation_backend": "remote"}
+    )
     root = tmp_path / "project"
     project = dependencies.projects.create(root, "Tripo lifecycle")
     source = tmp_path / "source.png"
@@ -106,7 +109,7 @@ def test_approved_tripo_lifecycle_uploads_creates_gets_downloads_and_registers_g
     assert [name for name, _ in provider.calls].count("tripo.create") == 1
 
 
-def test_multiview_tripo_submission_requires_confirmed_crops_before_upload(
+def test_multiview_submission_rejects_unconfirmed_crops_before_approval_or_job(
     tmp_path: Path,
 ) -> None:
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
@@ -137,30 +140,11 @@ def test_multiview_tripo_submission_requires_confirmed_crops_before_upload(
         },
         "generate-multiview",
     )
-    assert requested.ui_action is not None
-    queued = dependencies.b02_runtime.decide_approval(
-        root, project.id, requested.ui_action["action_id"], approved=True
-    )
-    assert queued.job is not None
-    transfer = FakeFileTransferProvider()
-    provider = FakeTripo3DProvider()
-    handler = TripoLifecycleHandler(
-        dependencies.jobs,
-        dependencies.assets,
-        transfer,
-        provider,
-        allowed_artifact_hosts=frozenset({"artifacts.fake.example"}),
-        multiview_repository=repository,
-    )
-    worker = ProductionJobWorker(dependencies.jobs, {"model3d.generate": handler.run})
-    assert worker.run_once(root, project.id, owner="worker") == queued.job["job_id"]
-    job = dependencies.jobs.get(root / "project.sqlite3", job_id=queued.job["job_id"])
-    assert job.status is JobStatus.FAILED
-    assert job.resume_class is ResumeClass.MANUAL_REVIEW
-    assert job.error["code"] == "MULTIVIEW_CROP_CONFIRMATION_REQUIRED"
-    assert job.error["safe_to_retry"] is False
-    assert not transfer.calls and not provider.calls
-    assert worker.run_once(root, project.id, owner="worker") is None
+    assert requested.status == "failed"
+    assert requested.ui_action is None
+    assert requested.error is not None
+    assert requested.error["code"] == "MULTIVIEW_CROP_CONFIRMATION_REQUIRED"
+    assert dependencies.jobs.list_nonterminal(root / "project.sqlite3") == []
 
 
 def test_multiview_tripo_submission_accepts_confirmed_final_crops_without_quality_gate(
@@ -188,6 +172,26 @@ def test_multiview_tripo_submission_accepts_confirmed_final_crops_without_qualit
     crops = dependencies.multiview.crop_confirmed_views(
         root, project.id, set_id=set_id, request_id="crop-final-views"
     )
+    wrong_set = dependencies.registry.execute(
+        root,
+        project.id,
+        "model3d.generate",
+        "1.0.0",
+        {
+            "mode": "multiview",
+            "multiview_set_id": str(source["id"]),
+            "view_asset_ids": crops,
+            "provider_profile": "fake-tripo",
+            "model": "fake",
+            "parameters": {},
+        },
+        "generate-wrong-multiview-set",
+    )
+    assert wrong_set.status == "failed"
+    assert wrong_set.error is not None
+    assert wrong_set.error["code"] == "MULTIVIEW_CROP_CONFIRMATION_REQUIRED"
+    assert wrong_set.ui_action is None
+    assert dependencies.jobs.list_nonterminal(root / "project.sqlite3") == []
     requested = dependencies.registry.execute(
         root,
         project.id,
@@ -195,9 +199,7 @@ def test_multiview_tripo_submission_accepts_confirmed_final_crops_without_qualit
         "1.0.0",
         {
             "mode": "multiview",
-            # Agent callers used to confuse the sheet asset with the persisted set.
-            # The exact confirmed crop triple remains authoritative and repairs this ref.
-            "multiview_set_id": str(source["id"]),
+            "multiview_set_id": set_id,
             "view_asset_ids": crops,
             "provider_profile": "fake-tripo",
             "model": "fake",

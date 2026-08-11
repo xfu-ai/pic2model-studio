@@ -7,7 +7,7 @@ import {
   Selection,
   SquaresFour,
 } from "@phosphor-icons/react";
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 import type {
   ApiClient,
   AssetDto,
@@ -16,6 +16,7 @@ import type {
 } from "../../shared/api/client";
 
 type PaidAction = "variants" | "multiview" | "model3d";
+type LocalImageAction = "resize" | "upscale";
 
 const productionProfile = "image-generation/auto";
 const productionModel = "auto";
@@ -225,6 +226,129 @@ function ExternalTransferApproval({
   );
 }
 
+function LocalImageSizeDialog({
+  asset,
+  api,
+  projectId,
+  onCancel,
+  onCompleted,
+  onQueued,
+}: {
+  asset: AssetDto;
+  api: ApiClient;
+  projectId: string;
+  onCancel(): void;
+  onCompleted(assetId: string): void;
+  onQueued(): void;
+}) {
+  const sourceWidth = typeof asset.metadata.width === "number" ? asset.metadata.width : 1024;
+  const sourceHeight = typeof asset.metadata.height === "number" ? asset.metadata.height : 1024;
+  const [action, setAction] = useState<LocalImageAction>("resize");
+  const [width, setWidth] = useState(String(sourceWidth));
+  const [height, setHeight] = useState(String(sourceHeight));
+  const [lockAspectRatio, setLockAspectRatio] = useState(true);
+  const [outputFormat, setOutputFormat] = useState("png");
+  const [quality, setQuality] = useState(90);
+  const [scale, setScale] = useState<2 | 4>(2);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      if (action === "resize") {
+        const targetWidth = Number(width);
+        const targetHeight = Number(height);
+        if (!Number.isInteger(targetWidth) || !Number.isInteger(targetHeight)
+          || targetWidth < 1 || targetHeight < 1
+          || targetWidth > 16384 || targetHeight > 16384) {
+          throw new Error("宽度和高度必须是 1–16384 之间的整数。");
+        }
+        const result = await api.invokeTool(
+          projectId,
+          "image.normalize",
+          {
+            source_asset_id: asset.id,
+            target_width: targetWidth,
+            target_height: targetHeight,
+            lock_aspect_ratio: lockAspectRatio,
+            output_format: outputFormat,
+            quality,
+            preserve_alpha: true,
+          },
+          requestId("canvas-resize"),
+        );
+        const outputAssetId = result.output_asset_ids?.[0];
+        if (!result.ok || result.status !== "succeeded" || !outputAssetId) {
+          throw new Error(result.error?.user_message ?? "图片尺寸调整失败，请重试。");
+        }
+        await api.setCurrentAsset(projectId, outputAssetId, requestId("canvas-resize-current"));
+        onCompleted(outputAssetId);
+        return;
+      }
+
+      const result = await api.invokeTool(
+        projectId,
+        "image.upscale_local",
+        { source_asset_id: asset.id, scale },
+        requestId("canvas-upscale"),
+      );
+      if (!result.ok || result.status !== "queued" || !result.job?.job_id) {
+        throw new Error(result.error?.user_message ?? "本地超分任务未能进入队列。");
+      }
+      onQueued();
+    } catch (unknownError) {
+      setError(
+        unknownError instanceof Error
+          ? unknownError.message
+          : "图片处理失败，请重试。",
+      );
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop local-image-size-backdrop">
+      <form
+        className="dialog local-image-size-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="local-image-size-title"
+        onSubmit={(event) => void submit(event)}
+      >
+        <p className="eyebrow">本地图片处理</p>
+        <h2 id="local-image-size-title">调整尺寸与超分</h2>
+        <p>原图不会被覆盖，处理结果会保存为新的受管资产。</p>
+        <div className="local-image-mode" aria-label="处理方式">
+          <button type="button" aria-pressed={action === "resize"} onClick={() => setAction("resize")}>普通缩放</button>
+          <button type="button" aria-pressed={action === "upscale"} onClick={() => setAction("upscale")}>本地超分</button>
+        </div>
+        {action === "resize" ? (
+          <div className="local-image-fields">
+            <label>宽度<input aria-label="目标宽度" type="number" min="1" max="16384" value={width} onChange={(event) => setWidth(event.target.value)} /></label>
+            <label>高度<input aria-label="目标高度" type="number" min="1" max="16384" value={height} onChange={(event) => setHeight(event.target.value)} /></label>
+            <label>输出格式<select aria-label="输出格式" value={outputFormat} onChange={(event) => setOutputFormat(event.target.value)}><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
+            <label>质量<input aria-label="输出质量" type="number" min="1" max="100" value={quality} onChange={(event) => setQuality(Number(event.target.value))} /></label>
+            <label className="local-image-checkbox"><input type="checkbox" checked={lockAspectRatio} onChange={(event) => setLockAspectRatio(event.target.checked)} />保持宽高比</label>
+          </div>
+        ) : (
+          <div className="local-image-fields">
+            <label>放大倍数<select aria-label="放大倍数" value={scale} onChange={(event) => setScale(Number(event.target.value) as 2 | 4)}><option value={2}>2×</option><option value={4}>4×</option></select></label>
+            <p className="local-image-note">使用内置 Real-ESRGAN 模型离线处理，不会上传图片。</p>
+          </div>
+        )}
+        {error && <p className="local-image-error" role="alert">{error}</p>}
+        <div className="dialog-actions">
+          <button type="button" disabled={submitting} onClick={onCancel}>取消</button>
+          <button type="submit" className="primary" disabled={submitting}>{submitting ? "正在处理…" : action === "resize" ? "生成缩放结果" : "开始本地超分"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export function CanvasContextToolbar({
   projectId,
   api,
@@ -233,6 +357,7 @@ export function CanvasContextToolbar({
   referenceAvailable,
   onModeChange,
   onModelJobQueued,
+  onLocalImageCompleted,
 }: {
   projectId: string;
   api: ApiClient;
@@ -241,9 +366,11 @@ export function CanvasContextToolbar({
   referenceAvailable: boolean;
   onModeChange(mode: WorkspaceMode): void;
   onModelJobQueued?(jobId: string): void;
+  onLocalImageCompleted?(assetId: string): void;
 }) {
   const [approval, setApproval] = useState<PaidAction | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [localImageSizeOpen, setLocalImageSizeOpen] = useState(false);
 
   return (
     <>
@@ -321,11 +448,16 @@ export function CanvasContextToolbar({
               <button
                 type="button"
                 role="menuitem"
-                aria-disabled="true"
-                title="放大处理需要先在设置中启用图片编辑服务。"
+                aria-disabled={asset ? undefined : "true"}
+                title={asset ? "普通缩放或使用内置模型进行本地超分。" : "需要先选择一张受管图片。"}
+                onClick={() => {
+                  if (!asset) return;
+                  setMoreOpen(false);
+                  setLocalImageSizeOpen(true);
+                }}
               >
-                放大处理
-                <small>需要图片编辑服务</small>
+                调整尺寸与超分
+                <small>本地处理</small>
               </button>
             </div>
           )}
@@ -344,6 +476,23 @@ export function CanvasContextToolbar({
               onModelJobQueued?.(result.job.job_id);
             }
             setApproval(null);
+            onModeChange("task_waiting");
+          }}
+        />
+      )}
+      {localImageSizeOpen && asset && (
+        <LocalImageSizeDialog
+          asset={asset}
+          api={api}
+          projectId={projectId}
+          onCancel={() => setLocalImageSizeOpen(false)}
+          onCompleted={(assetId) => {
+            setLocalImageSizeOpen(false);
+            onLocalImageCompleted?.(assetId);
+            onModeChange("image");
+          }}
+          onQueued={() => {
+            setLocalImageSizeOpen(false);
             onModeChange("task_waiting");
           }}
         />

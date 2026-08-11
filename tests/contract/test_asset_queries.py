@@ -37,6 +37,15 @@ def test_b01_05_asset_groups_usage_lineage_and_sibling_comparison_are_stable(tmp
         "models",
         "exports",
     } <= groups
+    default_source = next(item for item in service.list_by_group(root, project.id) if item["id"] == source["id"])
+    assert "visual_fingerprint" not in default_source
+    visual_source = next(
+        item
+        for item in service.list_by_group(root, project.id, include_visual_identities=True)
+        if item["id"] == source["id"]
+    )
+    assert len(visual_source["visual_fingerprint"]) == 128
+    assert visual_source["visual_aspect_ratio"] == 1
     lineage = service.lineage(root, project.id, first["id"])
     assert lineage["children"] == [second["id"]]
     assert service.compare_siblings(root, project.id, first["id"], second["id"])["same_family"]

@@ -1,0 +1,57 @@
+.asset-file-actions {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.asset-file-action-buttons {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.asset-file-action-buttons button {
+  display: inline-flex;
+  min-height: var(--size-control);
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-3);
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.asset-file-action-buttons button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.asset-file-action-buttons button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.asset-file-feedback {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--font-tiny);
+  line-height: 1.35;
+}
+
+.asset-file-feedback.success {
+  color: var(--color-success);
+}
+
+.asset-file-feedback.error {
+  color: var(--color-danger);
+}

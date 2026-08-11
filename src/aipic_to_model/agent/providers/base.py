@@ -38,6 +38,7 @@ class ModelRequest:
     temperature: float | None = None
     max_output_tokens: int | None = None
     reasoning_effort: Literal["none", "low", "medium", "high", "max"] | None = None
+    tool_choice: Literal["required"] | None = None
 
 
 class AgentModelProvider(Protocol):

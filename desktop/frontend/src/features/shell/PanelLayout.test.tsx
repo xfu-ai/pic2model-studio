@@ -152,6 +152,12 @@ vi.mock("../agent/AgentPanel", () => ({
       jobType: "edit_image.remove_background_local",
       resultAssetIds: ["part-a-clean"],
     })}>模拟 Agent 部件去背景</button>
+    <button onClick={() => onWorkspaceAction?.({
+      mode: "image",
+      assetId: "source",
+      jobType: "image.normalize",
+      resultAssetIds: ["source-resized"],
+    })}>模拟 Agent 调整当前图片尺寸</button>
   </div>,
 }));
 
@@ -221,6 +227,33 @@ describe("PanelLayout task result navigation", () => {
 
     await waitFor(() => expect(screen.getByLabelText("target extract state")).toHaveTextContent('"result_asset_ids":["part-a-clean","part-b"]'));
     expect(screen.getByLabelText("target extract state")).toHaveTextContent('"source_asset_id":"parts-sheet"');
+  });
+
+  it("opens an Agent resize result as the current image", async () => {
+    const api = {
+      assets: vi.fn().mockResolvedValue([]),
+      jobs: vi.fn().mockResolvedValue({ items: [] }),
+      setCurrentAsset: vi.fn().mockResolvedValue({}),
+    };
+    render(
+      <PanelLayout
+        projectId="project-1"
+        projectName="Project"
+        readOnly={false}
+        api={api as never}
+        state={structuredClone(DEFAULT_WORKSPACE)}
+        onPatch={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "模拟 Agent 调整当前图片尺寸" }));
+
+    await waitFor(() => expect(api.setCurrentAsset).toHaveBeenCalledWith(
+      "project-1",
+      "source-resized",
+      expect.any(String),
+    ));
+    expect(screen.getByRole("heading", { name: "image" })).toBeVisible();
   });
 
   it("opens a scoped candidate workspace without changing the current asset", async () => {
@@ -399,6 +432,7 @@ describe("PanelLayout task result navigation", () => {
         quality_confirmed: false,
         set_id: null,
         job_id: "job-agent-multiview",
+        pending_action_id: null,
       }),
     );
   });

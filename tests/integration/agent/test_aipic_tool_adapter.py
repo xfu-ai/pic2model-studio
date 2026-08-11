@@ -131,11 +131,95 @@ def test_adapter_preserves_queued_job_and_ui_action_details() -> None:
     assert isinstance(job, dict) and job["job_id"] == "job"
 
 
+def test_adapter_preserves_advisory_verification_without_changing_tool_success() -> None:
+    from aipic_to_model.agent.integrations.aipic_tools import _agent_result
+
+    source = ToolResultV1(
+        True,
+        "succeeded",
+        "call",
+        ["asset"],
+        json.dumps(
+            {
+                "message": "Background removed locally.",
+                "verification": {
+                    "schema_version": 1,
+                    "disposition": "review_required",
+                    "checks": [
+                        {"code": "image.background_removal_alpha", "outcome": "warn"}
+                    ],
+                },
+            }
+        ),
+        [],
+    )
+
+    result = _agent_result(source, "agent-call")
+
+    assert result.is_error is False
+    assert isinstance(result.details, dict)
+    assert result.details["status"] == "succeeded"
+    assert result.content[0] == TextContent("Background removed locally.")
+    assert result.details["verification"]["disposition"] == "review_required"
+
+
+def test_execution_outline_parser_is_best_effort_and_non_blocking() -> None:
+    from aipic_to_model.agent.integrations.runtime import _execution_outline_from_message
+
+    parsed = _execution_outline_from_message(
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "<execution_outline>\ngoal: update asset\ncurrent: 1\n</execution_outline>",
+                }
+            ],
+        }
+    )
+
+    assert parsed is not None
+    assert parsed["parse_state"] == "structured"
+    assert parsed["fields"] == {"goal": "update asset", "current": "1"}
+    assert _execution_outline_from_message({"role": "assistant", "content": "plain reply"}) is None
+
+
+def test_facade_exposes_verification_to_the_model_after_a_successful_tool_call() -> None:
+    from aipic_to_model.agent.integrations.facade_tools import _facade_agent_result
+
+    result = ToolResultV1(
+        True,
+        "succeeded",
+        "call",
+        ["asset"],
+        json.dumps(
+            {
+                "message": "Background removed locally.",
+                "verification": {"disposition": "review_required", "checks": []},
+            }
+        ),
+        [],
+    )
+
+    converted = _facade_agent_result(result, "agent-call", source_tool="edit_image")
+
+    assert isinstance(converted.details, dict)
+    assert converted.details["verification"]["disposition"] == "review_required"
+    assert isinstance(converted.content[0], TextContent)
+    assert converted.content[0].text.startswith("Background removed locally.")
+    assert '"verification"' in converted.content[0].text
+
+
 def test_runtime_exposes_fixed_tools_and_projects_approval_details(tmp_path) -> None:
     from aipic_to_model.agent.integrations.runtime import (
         AgentRuntime,
         _message_dto,
         _sanitize_message,
+    )
+    from aipic_to_model.agent.integrations.progressive_tools import (
+        AGGREGATE_TOOL_NAMES,
+        BUSINESS_TOOL_NAMES,
+        PERMANENT_TOOL_NAMES,
     )
     from aipic_to_model.application.host_capabilities import HostCapabilityStore
     from aipic_to_model.composition import compose_local_app
@@ -147,33 +231,15 @@ def test_runtime_exposes_fixed_tools_and_projects_approval_details(tmp_path) -> 
     runtime = AgentRuntime(dependencies.registry, dependencies.root_for)
     created = runtime.create(project.id)
     conversation = runtime._conversations[(project.id, str(created["id"]))]
-    tool_names = {tool.name for tool in conversation.harness.agent.state.tools}
-    assert tool_names == {
-        "read",
-        "write",
-        "edit",
-        "bash",
-        "inspect_workspace",
-        "select_asset",
-        "analyze_image",
-        "understand_image",
-        "generate_images",
-        "edit_image",
-        "split_image",
-        "prepare_multiview",
-        "generate_model3d",
-        "process_model3d",
-        "control_job",
+    tool_names = tuple(tool.name for tool in conversation.harness.agent.state.tools)
+    assert tool_names == PERMANENT_TOOL_NAMES
+    catalog_tools = {
+        tool.name: tool for tool in conversation.harness._tool_catalog.all()
     }
-    aipic_tools = {
-        tool.name: tool for tool in conversation.harness.agent.state.tools if "_" in tool.name
-    }
-    assert len(aipic_tools) == 11
-    assert all(
-        "Do not " in tool.description for tool in aipic_tools.values()
-    )
-    assert "Never poll repeatedly" in aipic_tools["control_job"].description
-    assert "Do not choose among candidates" in aipic_tools["select_asset"].description
+    assert set(BUSINESS_TOOL_NAMES) <= set(catalog_tools)
+    assert not set(AGGREGATE_TOOL_NAMES) & set(catalog_tools)
+    assert all("exact managed references" in catalog_tools[name].description for name in BUSINESS_TOOL_NAMES)
+    assert "next model turn" in catalog_tools["toolbox.load"].description
     assert "Never use filesystem or shell tools" in conversation.harness.snapshot().system_prompt
     system_prompt = conversation.harness.snapshot().system_prompt
     assert "already bound to the current managed project" in system_prompt
@@ -289,7 +355,7 @@ def test_runtime_projects_pi_content_blocks_and_tool_result_pairing() -> None:
     assert projected_result.content[0].text == (
         "asset.list returned 100 managed assets. Current asset: asset-99. "
         "The full inventory is retained locally; use "
-        "inspect_workspace(view=asset_details) when an individual entry is needed."
+            "asset.get_metadata when an individual entry is needed."
     )
     assert raw_result.content[0].text == inventory
 

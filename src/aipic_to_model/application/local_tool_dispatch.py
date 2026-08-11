@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
@@ -43,8 +45,19 @@ class LocalToolDispatcher:
                 if self._model_assets is None:
                     raise ValueError("model inspection is not configured")
                 asset_id = str(arguments["asset_id"])
-                self._model_assets.inspect(root, project_id, asset_id)
-                return self._success(call_id, [asset_id], "3D model inspected.")
+                inspection = self._model_assets.inspect(root, project_id, asset_id)
+                return self._success(
+                    call_id,
+                    [asset_id],
+                    json.dumps(
+                        {
+                            "message": "3D model inspected.",
+                            "inspection": inspection.model_dump(mode="json"),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
             if name == "prompt.extract_bilingual":
                 source_id = str(arguments["analysis_asset_id"])
                 source = self._assets.get(root, project_id, source_id)
@@ -98,7 +111,22 @@ class LocalToolDispatcher:
                 )
                 asset = cast(dict[str, object], result["asset"])
                 return self._success(call_id, [str(asset["id"])], "Prompts merged.")
-            if name in {"prompt.get_current", "prompt.validate"}:
+            if name == "prompt.get_current":
+                asset_id = str(arguments["prompt_asset_id"])
+                prompt = self._prompts.parse_asset(root, project_id, asset_id)
+                return self._success(
+                    call_id,
+                    [asset_id],
+                    json.dumps(
+                        {
+                            "message": "Prompt loaded.",
+                            "prompt": asdict(prompt),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+            if name == "prompt.validate":
                 asset_id = str(arguments["prompt_asset_id"])
                 self._prompts.parse_asset(root, project_id, asset_id)
                 return self._success(call_id, [asset_id], "Prompt is valid.")
@@ -122,7 +150,12 @@ class LocalToolDispatcher:
                     alpha_threshold=int(arguments.get("alpha_threshold", 0)),
                     request_id=f"tool:{call_id}",
                 )
-                return self._success(call_id, [str(result["id"])], "Transparent border trimmed.")
+                return self._success(
+                    call_id,
+                    [str(result["id"])],
+                    "Transparent border trimmed.",
+                    verification=_verification_from_result(result),
+                )
             if name == "image.normalize":
                 result = self._local_images.normalize_asset(
                     root,
@@ -145,7 +178,12 @@ class LocalToolDispatcher:
                     preserve_alpha=bool(arguments.get("preserve_alpha", True)),
                     request_id=f"tool:{call_id}",
                 )
-                return self._success(call_id, [str(result["id"])], "Image normalized locally.")
+                return self._success(
+                    call_id,
+                    [str(result["id"])],
+                    "Image normalized locally.",
+                    verification=_verification_from_result(result),
+                )
             if name == "image.remove_background_local":
                 raw_target = arguments.get("target_color")
                 target_color = None
@@ -177,7 +215,12 @@ class LocalToolDispatcher:
                     edge_shrink=int(arguments.get("edge_shrink", 0)),
                     request_id=f"tool:{call_id}",
                 )
-                return self._success(call_id, [str(result["id"])], "Background removed locally.")
+                return self._success(
+                    call_id,
+                    [str(result["id"])],
+                    "Background removed locally.",
+                    verification=_verification_from_result(result),
+                )
             if name == "image.split_local":
                 results = self._local_images.split_asset(
                     root,
@@ -196,6 +239,7 @@ class LocalToolDispatcher:
                     call_id,
                     [str(result["id"]) for result in results],
                     f"{len(results)} local image parts created.",
+                    verification=_split_verification(results),
                 )
             if name == "multiview.request_box_confirmation":
                 set_id = str(arguments["multiview_set_id"])
@@ -300,5 +344,66 @@ class LocalToolDispatcher:
         )
 
     @staticmethod
-    def _success(call_id: str, asset_ids: list[str], summary: str) -> ToolResultV1:
-        return ToolResultV1(True, "succeeded", call_id, asset_ids, summary, [])
+    def _success(
+        call_id: str,
+        asset_ids: list[str],
+        summary: str,
+        *,
+        verification: dict[str, Any] | None = None,
+    ) -> ToolResultV1:
+        structured_summary = summary
+        if verification is not None:
+            # Keep ToolResultV1's frozen public schema unchanged.  The Agent
+            # adapter recognizes this additive summary envelope and exposes the
+            # report through its own internal details field.
+            structured_summary = json.dumps(
+                {"message": summary, "verification": verification},
+                separators=(",", ":"),
+            )
+        return ToolResultV1(
+            True,
+            "succeeded",
+            call_id,
+            asset_ids,
+            structured_summary,
+            [],
+        )
+
+
+def _verification_from_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    verification = result.get("verification")
+    return verification if isinstance(verification, dict) else None
+
+
+def _split_verification(results: list[dict[str, Any]]) -> dict[str, Any]:
+    dimensions: list[dict[str, int]] = []
+    for result in results:
+        report = _verification_from_result(result) or {}
+        facts = report.get("facts")
+        if isinstance(facts, dict) and isinstance(facts.get("width"), int) and isinstance(
+            facts.get("height"), int
+        ):
+            dimensions.append({"width": facts["width"], "height": facts["height"]})
+    uniform = len({(item["width"], item["height"]) for item in dimensions}) <= 1
+    outcome = "pass" if uniform else "warn"
+    return {
+        "schema_version": 1,
+        "kind": "image_split",
+        "operation": "split_local",
+        "disposition": "verified" if uniform else "review_required",
+        "facts": {"output_count": len(results), "dimensions": dimensions},
+        "checks": [
+            {
+                "code": "image.split_dimensions_uniform",
+                "outcome": outcome,
+                "observed": {"dimensions": dimensions},
+                **(
+                    {}
+                    if uniform
+                    else {
+                        "message": "Split outputs do not all share the same dimensions; normalize if a fixed size is required."
+                    }
+                ),
+            }
+        ],
+    }

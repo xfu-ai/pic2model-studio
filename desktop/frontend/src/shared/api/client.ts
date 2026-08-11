@@ -79,7 +79,7 @@ export class ApiClient {
     });
   }
 
-  assets(projectId: string, includeTrashed = false) { return this.request<AssetDto[]>(`/v1/projects/${projectId}/assets?include_trashed=${includeTrashed}`); }
+  assets(projectId: string, includeTrashed = false, includeVisualIdentities = false) { return this.request<AssetDto[]>(`/v1/projects/${projectId}/assets?include_trashed=${includeTrashed}&include_visual_identities=${includeVisualIdentities}`); }
   async assetContent(projectId: string, assetId: string, signal?: AbortSignal): Promise<Blob> {
     const response = await fetch(
       `${this.session.base_url}/v1/assets/${assetId}/content?project_id=${encodeURIComponent(projectId)}`,
@@ -132,6 +132,13 @@ export class ApiClient {
       method: "POST",
       headers: { "X-Request-Id": requestId },
       body: JSON.stringify({ project_id: projectId, export_capability_id: exportCapabilityId, request_id: requestId }),
+    });
+  }
+  revealAsset(projectId: string, assetId: string, requestId: string) {
+    return this.request<{ asset_id: string; opened: boolean }>(`/v1/assets/${assetId}/reveal`, {
+      method: "POST",
+      headers: { "X-Request-Id": requestId },
+      body: JSON.stringify({ project_id: projectId, request_id: requestId }),
     });
   }
   assetLineage(projectId: string, assetId: string) { return this.request<AssetLineageDto>(`/v1/assets/${assetId}/lineage?project_id=${encodeURIComponent(projectId)}`); }
@@ -294,6 +301,13 @@ export class ApiClient {
       `/v1/agent/conversations/${conversationId}/events?project_id=${encodeURIComponent(projectId)}&after=${after}`,
     );
   }
+  completeAgentMultiviewAction(projectId: string, actionId: string, multiviewRef: string, viewAssetRefs: Record<"front" | "side" | "back", string>, requestId: string) {
+    return this.request<{ status: string }>(`/v1/agent/ui-actions/${actionId}/complete-multiview`, {
+      method: "POST",
+      headers: { "X-Request-Id": requestId },
+      body: JSON.stringify({ project_id: projectId, multiview_ref: multiviewRef, view_asset_refs: viewAssetRefs, request_id: requestId }),
+    });
+  }
   hideAsset(projectId: string, assetId: string, requestId: string) { return this.assetAction(`/v1/assets/${assetId}/hide`, projectId, requestId); }
   restoreHiddenAsset(projectId: string, assetId: string, requestId: string) { return this.assetAction(`/v1/assets/${assetId}/restore-hidden`, projectId, requestId); }
   trashAsset(projectId: string, assetId: string, impactToken: string, requestId: string) {
@@ -357,7 +371,7 @@ export type WorkflowContexts = {
     agent_run_id: string | null;
     agent_instruction: string;
   };
-  multiview: { selected: Record<string, string>; regions: Record<string, SelectionRect>; checks: Record<string, string>; quality_confirmed: boolean; set_id: string | null; job_id: string | null };
+  multiview: { selected: Record<string, string>; regions: Record<string, SelectionRect>; checks: Record<string, string>; quality_confirmed: boolean; set_id: string | null; job_id: string | null; pending_action_id?: string | null };
   model3d: { asset_id: string | null; target_triangles: number; generation_job_id: string | null };
 };
 
@@ -452,9 +466,16 @@ export type LocalProviderStatusDto = {
     license: { identifier: string; source_url: string; notice: string };
   }>;
 };
-export type AssetDto = { id: string; asset_type: string; name: string; parent_asset_id?: string | null; thumbnail_asset_id?: string | null; is_current: boolean; is_hidden?: boolean; trashed_at?: string | null; mime_type?: string; size_bytes?: number; metadata: Record<string, unknown>; provenance?: Record<string, unknown>; version_no?: number; created_at?: string };
+export type AssetDto = { id: string; asset_type: string; name: string; parent_asset_id?: string | null; thumbnail_asset_id?: string | null; is_current: boolean; is_hidden?: boolean; trashed_at?: string | null; mime_type?: string; size_bytes?: number; sha256?: string; visual_fingerprint?: string; visual_aspect_ratio?: number; metadata: Record<string, unknown>; provenance?: Record<string, unknown>; version_no?: number; created_at?: string };
 export type AssetLineageDto = { asset_id: string; parent_asset_id?: string | null; children: string[]; siblings: string[]; usage: Record<string, unknown> };
-export type AssetImpactDto = { impact_token: string; children?: unknown[]; incoming_links?: unknown[]; [key: string]: unknown };
+export type AssetImpactDto = {
+  impact_token: string;
+  children?: unknown[];
+  incoming_links?: unknown[];
+  active_tool_calls?: unknown[];
+  is_current?: boolean;
+  [key: string]: unknown;
+};
 export type AssetComparisonDto = { left: AssetDto; right: AssetDto; same_family: boolean; version_delta: number; [key: string]: unknown };
 export type SetCurrentAssetResult = { decision: { asset_id: string; previous_asset_id: string | null }; event: Record<string, unknown> };
 export type ToolResultDto = {
@@ -518,6 +539,8 @@ export type AgentConversationDto = {
   project_id: string;
   state: "idle" | "running" | "error";
   message_count: number;
+  active_tools?: string[];
+  active_skills?: string[];
   created_at?: string;
   updated_at?: string;
   preview?: string;
@@ -530,6 +553,7 @@ export type AgentMessageDto = {
   tool_name?: string;
   tool_call_id?: string;
   is_error?: boolean;
+  added_tool_names?: string[];
   stop_reason?: "stop" | "length" | "tool_use" | "error" | "aborted";
   error_message?: string | null;
   attachments?: AgentAttachmentDto[];
@@ -572,6 +596,7 @@ export type AgentToolResultDto = {
   content: AgentContentBlock[];
   details?: AgentMessageDto["details"];
   is_error: boolean;
+  added_tool_names?: string[];
 };
 export type AgentEventDto = {
   sequence_no: number;
@@ -588,9 +613,43 @@ export type AgentEventDto = {
     result?: AgentToolResultDto | null;
     message?: AgentMessageDto;
     code?: string;
+    plan?: AgentExecutionPlanDto;
     reason?: "context_overflow" | "model_load_failed" | "provider_internal" | "request_format" | "resource_exhausted" | "runner_unavailable" | "vision_request";
   };
   created_at: string;
+};
+export type AgentPlanStepDto = {
+  id: string;
+  label: string;
+  tool_name?: string | null;
+  operation?: string | null;
+  state: "pending" | "running" | "succeeded" | "review_required" | "failed";
+  warning?: string | null;
+  attempts?: Array<{
+    tool_name: string;
+    state: "succeeded" | "review_required" | "failed";
+    tool_call_id?: string | null;
+    warning?: string | null;
+  }>;
+};
+export type AgentExecutionPlanDto = {
+  version: number;
+  goal: string;
+  deliverables?: string[];
+  constraints?: string[];
+  acceptance_criteria?: string[];
+  blocking_questions?: string[];
+  steps: AgentPlanStepDto[];
+  current_step_id?: string | null;
+  state: "executing" | "waiting_user" | "completed" | "completed_with_warnings";
+  next_action: "execute" | "ask_user" | "respond";
+  fallback?: boolean;
+  planner_diagnostic?: {
+    code: "provider_timeout" | "provider_error" | "empty_output" | "non_json_output" | "schema_invalid" | "planner_internal_error";
+    duration_ms: number;
+    output_characters: number;
+    json_object_detected: boolean;
+  } | null;
 };
 export type AgentEventsDto = { items: AgentEventDto[]; next_cursor: number };
 export type AgentMessagesDto = {
@@ -598,6 +657,12 @@ export type AgentMessagesDto = {
   event_cursor?: number;
   next_before?: number | null;
   has_more?: boolean;
+  execution_plan?: AgentExecutionPlanDto | null;
+  pending_ui_actions?: Array<{
+    tool_call_id: string;
+    tool_name: string;
+    result: AgentToolResultDto;
+  }>;
 };
 export type SelectionRect = { x: number; y: number; width: number; height: number };
 export type SelectionDto = { id: string; rects: SelectionRect[]; revision: number; status: string; visual_state?: string };

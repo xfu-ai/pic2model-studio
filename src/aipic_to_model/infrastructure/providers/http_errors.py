@@ -18,6 +18,7 @@ def http_failure(
     retry_after_seconds: int | None = None,
     timed_out: bool = False,
     configuration_missing: bool = False,
+    request_invalid: bool = False,
     submission_ambiguous: bool = False,
     fee_incurred: bool = False,
     credits_exhausted: bool = False,
@@ -47,6 +48,14 @@ def http_failure(
             "The configured Provider model is unavailable.",
             False,
             RecommendedAction.CONFIGURE_PROVIDER,
+        )
+    elif request_invalid:
+        code, category, message, recoverable, action = (
+            "PROVIDER_REQUEST_INVALID",
+            ErrorCategory.INPUT_INVALID,
+            "The Provider rejected an unsupported parameter combination.",
+            False,
+            RecommendedAction.FIX_INPUT,
         )
     elif submission_ambiguous:
         code, category, message, recoverable, action = (
@@ -105,6 +114,8 @@ def http_failure(
         )
     elif timed_out:
         technical_message = "provider_timeout; response_received=false"
+    elif request_invalid:
+        technical_message = "provider_response; result=rejected"
     elif submission_ambiguous:
         technical_message = "provider_submission; result=ambiguous"
 

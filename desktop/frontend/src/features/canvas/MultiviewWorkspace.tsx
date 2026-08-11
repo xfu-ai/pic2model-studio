@@ -627,6 +627,7 @@ export function MultiviewWorkspace({
       quality_confirmed: false,
       set_id: multiviewSetId,
       job_id: generationJobId,
+      pending_action_id: workflowContext?.pending_action_id ?? null,
     };
     if (workflowContext && JSON.stringify(workflowContext) === JSON.stringify(next)) return;
     onWorkflowContextChange?.(next);
@@ -951,8 +952,26 @@ export function MultiviewWorkspace({
       const viewAssetIds = Object.fromEntries(
         directions.map((view, index) => [view, crops.output_asset_ids[index]]),
       ) as Record<Direction, string>;
+      if (workflowContext?.pending_action_id) {
+        await api.completeAgentMultiviewAction(
+          projectId,
+          workflowContext.pending_action_id,
+          set.id,
+          viewAssetIds,
+          requestId(),
+        );
+      }
       setGeneratedViewIds(viewAssetIds);
       setMultiviewSetId(set.id);
+      onWorkflowContextChange?.({
+        selected: { source: source.id, ...viewAssetIds },
+        regions,
+        checks: {},
+        quality_confirmed: false,
+        set_id: set.id,
+        job_id: generationJobId,
+        pending_action_id: null,
+      });
       setMessage("裁切框已确认，正、侧、背三张受管图片已生成；可以直接进入 3D 模型处理。");
     } catch (error) {
       setMessage(

@@ -15,6 +15,23 @@ Use this file for the short rules that apply to every change.
   workspace, and screenshot evidence. Do not put API keys, bearer tokens, or
   absolute paths into new logs or assertions.
 
+## Source-first desktop startup
+
+- For development, debugging, interactive verification, and incident
+  reproduction, default to the Debug desktop host backed by the current
+  workspace source. Set `AIPIC_TO_MODEL_FORCE_PYTHON=1` and
+  `AIPIC_TO_MODEL_PYTHON=<workspace>\\.venv\\Scripts\\python.exe`; the host then
+  launches `python -m aipic_to_model.desktop_sidecar` with the workspace `src/`
+  on `PYTHONPATH`.
+- Do not launch `portable\\Pic2Model-Studio\\pic2model-studio.exe`, a release
+  executable, or a packaged `pic2model-sidecar(.exe)` for those source-code
+  workflows. They are allowed only for an explicitly requested release/package
+  validation.
+- Use the Vite development server for source frontend work so the Debug host
+  receives HMR updates. On a full host restart, create a new Agent conversation
+  when verifying changed system prompts because a conversation persists the
+  prompt that existed when it was created.
+
 ## Validation order
 
 Run the smallest relevant check first, then expand only when the change needs it:

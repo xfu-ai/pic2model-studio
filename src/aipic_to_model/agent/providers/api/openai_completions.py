@@ -73,6 +73,8 @@ class OpenAICompletionsProvider:
             payload["tools"] = [
                 self._wire_tool(tool, provider_tool_names) for tool in request.tools
             ]
+        if request.tool_choice == "required" and request.tools:
+            payload["tool_choice"] = "required"
         if request.temperature is not None:
             payload["temperature"] = request.temperature
         if request.max_output_tokens or request.profile.max_output_tokens:

@@ -50,13 +50,14 @@ def test_agent_system_prompt_has_a_non_optional_final_response_contract() -> Non
     assert "always send a concise, user-facing final summary" in prompt
     assert "Never end a turn with an empty assistant message" in prompt
     assert "Chinese input receives Chinese output, English input receives English output" in prompt
-    assert "call control_job with action=status at most once" in prompt
+    assert "call job.get_status at most once" in prompt
     assert "Image-presentation contract" in prompt
     assert "Image-tool decision contract" in prompt
     assert "ordinary generation, variants, transforms" in prompt
-    assert "analyze_image(content)" in prompt
-    assert "analyze_image(style)" in prompt
-    assert "analyze_image(3d_suitability)" in prompt
+    assert "image.analyze_content" in prompt
+    assert "image.analyze_style" in prompt
+    assert "image.evaluate_3d_suitability" in prompt
+    assert "toolbox.status" in prompt and "toolbox.load" in prompt
 
 
 def test_existing_agent_conversation_is_upgraded_before_its_next_turn(tmp_path: Path) -> None:
@@ -255,6 +256,20 @@ def test_agent_image_attachment_is_managed_persisted_and_hidden_from_display_con
                 (
                     ProviderEvent(ProviderEventType.MESSAGE_START),
                     ProviderEvent(
+                        ProviderEventType.TEXT_DELTA,
+                        delta=(
+                            '{"goal":"Use both reference images","deliverables":[],'
+                            '"constraints":[],"acceptance_criteria":[],"assumptions":[],'
+                            '"blocking_questions":[],"next_action":"respond","steps":[]}'
+                        ),
+                    ),
+                    ProviderEvent(ProviderEventType.MESSAGE_END),
+                )
+            ),
+            ScriptedResponse(
+                (
+                    ProviderEvent(ProviderEventType.MESSAGE_START),
+                    ProviderEvent(
                         ProviderEventType.MESSAGE_END,
                         message=AssistantMessage((TextContent("I can use the attached image."),)),
                     ),
@@ -369,6 +384,20 @@ def test_text_only_agent_receives_managed_reference_and_image_tool(
                 (
                     ProviderEvent(ProviderEventType.MESSAGE_START),
                     ProviderEvent(
+                        ProviderEventType.TEXT_DELTA,
+                        delta=(
+                            '{"goal":"Inspect the managed reference image","deliverables":[],'
+                            '"constraints":[],"acceptance_criteria":[],"assumptions":[],'
+                            '"blocking_questions":[],"next_action":"respond","steps":[]}'
+                        ),
+                    ),
+                    ProviderEvent(ProviderEventType.MESSAGE_END),
+                )
+            ),
+            ScriptedResponse(
+                (
+                    ProviderEvent(ProviderEventType.MESSAGE_START),
+                    ProviderEvent(
                         ProviderEventType.MESSAGE_END,
                         message=AssistantMessage((TextContent("I inspected it with the tool."),)),
                     ),
@@ -415,9 +444,9 @@ def test_text_only_agent_receives_managed_reference_and_image_tool(
     )
     assert isinstance(provider_user.content, str)
     assert f'source_asset_ref="{imported["id"]}"' in provider_user.content
-    assert "must call understand_image" in provider_user.content
+    assert "must call image.understand_for_agent" in provider_user.content
     assert str(image_path) not in provider_user.content
-    assert "understand_image" in {
+    assert "image.understand_for_agent" in {
         str(tool["function"]["name"])
         for tool in request.tools
         if isinstance(tool.get("function"), dict)

@@ -148,6 +148,31 @@ textarea:focus-visible,
   min-width: 0;
 }
 
+.image-capture-action > .asset-file-actions {
+  grid-column: 1 / -1;
+  padding: 0 0 var(--space-2);
+  border-right: 0;
+  border-bottom: var(--border-subtle);
+}
+
+.image-capture-action .asset-file-action-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.image-capture-action .asset-file-action-buttons button {
+  width: 100%;
+  padding-inline: var(--space-2);
+}
+
+.image-capture-action .asset-file-feedback {
+  position: static;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .canvas-context-toolbar {
   display: grid;
   align-content: start;

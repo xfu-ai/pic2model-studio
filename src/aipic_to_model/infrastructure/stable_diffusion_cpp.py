@@ -17,6 +17,7 @@ from PIL import Image
 
 from ..domain.local_inference import LocalEngineKind
 from .local_inference import LocalInferenceCancelled, LocalInferenceGate
+from .local_model_resources import resolve_local_model_resource
 
 STABLE_DIFFUSION_CPP_CAPABILITY = "local-runtime/stable-diffusion-cpp"
 Z_IMAGE_DIFFUSION_CAPABILITY = "local-model/z-image-turbo/diffusion"
@@ -28,6 +29,12 @@ _CAPABILITY_ENVIRONMENT = {
     Z_IMAGE_DIFFUSION_CAPABILITY: "AIPIC_ZIMAGE_DIFFUSION_MODEL",
     Z_IMAGE_VAE_CAPABILITY: "AIPIC_ZIMAGE_VAE",
     Z_IMAGE_LLM_CAPABILITY: "AIPIC_ZIMAGE_LLM",
+}
+_CAPABILITY_RESOURCES = {
+    STABLE_DIFFUSION_CPP_CAPABILITY: Path("z-image-turbo/runtime/sd-cli.exe"),
+    Z_IMAGE_DIFFUSION_CAPABILITY: Path("z-image-turbo/models/z_image_turbo-Q3_K.gguf"),
+    Z_IMAGE_VAE_CAPABILITY: Path("z-image-turbo/models/ae.safetensors"),
+    Z_IMAGE_LLM_CAPABILITY: Path("z-image-turbo/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
 }
 _SAFE_ENVIRONMENT_KEYS = {
     "CUDA_PATH",
@@ -88,14 +95,15 @@ class ZImageGenerationOutput:
 
 
 def resolve_environment_local_capability(capability_id: str) -> Path | None:
-    """Resolve fixed Host-owned capability slots without returning paths to callers."""
+    """Resolve an override or bundled Host-owned Z-Image capability slot."""
 
     variable = _CAPABILITY_ENVIRONMENT.get(capability_id)
     raw = os.environ.get(variable, "") if variable is not None else ""
-    if not raw:
-        return None
-    path = Path(raw).resolve()
-    return path if path.is_file() else None
+    if raw:
+        path = Path(raw).resolve()
+        return path if path.is_file() else None
+    relative = _CAPABILITY_RESOURCES.get(capability_id)
+    return resolve_local_model_resource(relative) if relative is not None else None
 
 
 class StableDiffusionCppRunner:

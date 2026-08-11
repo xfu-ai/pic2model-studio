@@ -125,11 +125,13 @@ class PersistentB02ToolRuntime:
         sync_dispatcher: Callable[[str, Path, str, dict[str, Any], str], ToolResultV1]
         | None = None,
         local_capability: Callable[[str], bool] | None = None,
+        multiview_repository: Any | None = None,
     ) -> None:
         self._jobs = jobs
         self._approvals = approvals
         self._sync_dispatcher = sync_dispatcher
         self._local_capability = local_capability or (lambda _name: False)
+        self._multiview_repository = multiview_repository
 
     def invoke(
         self,
@@ -193,6 +195,11 @@ class PersistentB02ToolRuntime:
                 },
             )
         if risk_level in {RiskLevel.EXTERNAL, RiskLevel.EXTERNAL_PAID} and name in _APPROVED_EXTERNALLY:
+            invalid_multiview = self._invalid_multiview_submission(
+                database, call_id, name, arguments
+            )
+            if invalid_multiview is not None:
+                return invalid_multiview
             return self._request_approval(database, project_id, call_id, name, arguments)
         if execution == "job":
             return self._schedule(database, call_id, name, risk_level, arguments)
@@ -268,6 +275,11 @@ class PersistentB02ToolRuntime:
         arguments = dict(summaries["arguments_summary"])
         if approval.provider_profile:
             arguments["provider_profile"] = approval.provider_profile
+        invalid_multiview = self._invalid_multiview_submission(
+            database, approval.tool_call_id, approval.tool_name, arguments
+        )
+        if invalid_multiview is not None:
+            return invalid_multiview
         retry_source_tool_call_id = arguments.get(_RETRY_SOURCE_TOOL_CALL_ID)
         arguments_hash, scope_hash = self._approval_hashes(
             approval.tool_name, approval.provider_profile, arguments
@@ -401,6 +413,55 @@ class PersistentB02ToolRuntime:
             [],
             {"type": "approval_required"},
             {"action_id": approval.id, "type": "approval_required", "workspace_mode": "working"},
+        )
+
+    def _invalid_multiview_submission(
+        self,
+        database: Path,
+        call_id: str,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> ToolResultV1 | None:
+        """Reject an unbound multiview request before approval or Job creation."""
+
+        if name != "model3d.generate" or arguments.get("mode") != "multiview":
+            return None
+        set_id = arguments.get("multiview_set_id")
+        members = arguments.get("view_asset_ids")
+        valid_members = (
+            isinstance(members, dict)
+            and set(members) == {"front", "side", "back"}
+            and all(isinstance(value, str) and value for value in members.values())
+            and len(set(members.values())) == 3
+        )
+        is_ready = (
+            isinstance(set_id, str)
+            and bool(set_id)
+            and valid_members
+            and self._multiview_repository is not None
+            and self._multiview_repository.is_ready_for_submission(
+                database, set_id=set_id, members=members
+            )
+        )
+        if is_ready:
+            return None
+        return ToolResultV1(
+            False,
+            "failed",
+            call_id,
+            [],
+            "The exact confirmed multiview set and crop references are required before 3D generation.",
+            [],
+            error={
+                "code": "MULTIVIEW_CROP_CONFIRMATION_REQUIRED",
+                "category": "input_invalid",
+                "user_message": "请先确认当前三视图的正面、侧面和背面裁切，再提交 3D 生成。",
+                "recoverable": True,
+                "failed_object": "multiview_set",
+                "failed_step": "crop_confirmation",
+                "safe_to_retry": False,
+                "recommended_action": "fix_input",
+            },
         )
 
     def _status(self, database: Path, call_id: str, job_id: str) -> ToolResultV1:

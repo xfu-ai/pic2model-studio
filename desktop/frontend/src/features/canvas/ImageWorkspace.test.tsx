@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssetDto } from "../../shared/api/client";
 import { ImageWorkspace } from "./ImageWorkspace";
@@ -145,5 +145,49 @@ describe("ImageWorkspace", () => {
 
     await screen.findByRole("img", { name: "Reference.png" });
     expect(api.assetContent).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens and exports the selected current image from the workbench toolbar", async () => {
+    const api = {
+      assets: vi.fn().mockResolvedValue([assets[1]]),
+      assetLineage: vi.fn().mockResolvedValue({
+        asset_id: "asset-v2",
+        parent_asset_id: null,
+        children: [],
+        siblings: [],
+        usage: {},
+      }),
+      assetContent: vi.fn().mockResolvedValue(new Blob(["image"])),
+      revealAsset: vi.fn().mockResolvedValue({ asset_id: "asset-v2", opened: true }),
+      exportAsset: vi.fn().mockResolvedValue({ asset_id: "asset-v2", name: "Reference.png", bytes: 256 }),
+    };
+    const host = { chooseExportDirectory: vi.fn().mockResolvedValue("export-capability") };
+    const { container } = render(
+      <ImageWorkspace
+        projectId="project-1"
+        api={api as never}
+        host={host}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    const workbench = within(container);
+    await workbench.findByRole("img", { name: "Reference.png" });
+    fireEvent.click(workbench.getByRole("button", { name: "打开目录" }));
+    await waitFor(() => expect(api.revealAsset).toHaveBeenCalledWith(
+      "project-1",
+      "asset-v2",
+      expect.stringMatching(/^asset-reveal-/),
+    ));
+
+    fireEvent.click(workbench.getByRole("button", { name: "导出资源" }));
+    await waitFor(() => expect(host.chooseExportDirectory).toHaveBeenCalledWith("project-1"));
+    expect(api.exportAsset).toHaveBeenCalledWith(
+      "project-1",
+      "asset-v2",
+      "export-capability",
+      expect.stringMatching(/^asset-export-/),
+    );
+    expect(await workbench.findByText("已导出 Reference.png。")).toBeVisible();
   });
 });

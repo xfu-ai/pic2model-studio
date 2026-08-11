@@ -96,6 +96,38 @@ describe("ModelViewport", () => {
     );
   });
 
+  it("automatically saves one static preview when a GLB first finishes loading", async () => {
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn().mockReturnValue("blob:model") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    const api = {
+      assets: vi.fn().mockResolvedValue([{ id: "model-1", name: "chair.glb", asset_type: "glb", is_current: true }]),
+      assetContent: vi.fn().mockResolvedValue(renderableGlb()),
+      jobs: vi.fn().mockResolvedValue({ items: [] }),
+      registerPreview: vi.fn().mockResolvedValue({ id: "preview-1", asset_type: "preview" }),
+    };
+    render(<ModelViewport projectId="project-1" api={api as never} />);
+
+    const modelViewer = await waitFor(() => {
+      const element = document.querySelector("model-viewer");
+      expect(element).toBeInTheDocument();
+      return element as HTMLElement;
+    });
+    Object.defineProperty(modelViewer, "toBlob", {
+      configurable: true,
+      value: vi.fn().mockResolvedValue({
+        arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer,
+      } as Blob),
+    });
+
+    fireEvent.load(modelViewer);
+    await waitFor(() => expect(api.registerPreview).toHaveBeenCalledWith(
+      "project-1", "model-1", expect.any(String), expect.any(String),
+    ));
+    fireEvent.load(modelViewer);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(api.registerPreview).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps an FBX conversion on the model page instead of opening the task center", async () => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn().mockReturnValue("blob:model") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });

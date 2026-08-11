@@ -6,7 +6,7 @@ from PIL import Image
 from aipic_to_model.application.assets import AssetService
 from aipic_to_model.application.projects import ProjectService
 from aipic_to_model.application.tool_catalog import B01_TOOLS, register_b01_tools
-from aipic_to_model.application.tools import ToolRegistry
+from aipic_to_model.application.tools import InMemoryJobSubmitter, ToolRegistry
 from aipic_to_model.domain.common import DomainErrorV1, ErrorCode, RiskLevel
 from aipic_to_model.domain.tools import ToolManifestV1, ToolResultV1
 
@@ -48,6 +48,27 @@ def test_b01_10_registered_project_tool_executes_and_is_audited(tmp_path):
     )
     assert result.status == "succeeded"
     assert json.loads(result.summary) == {**project.__dict__, "workspace_state": {}}
+
+
+def test_project_export_tool_fails_truthfully_without_a_connected_job_submitter(tmp_path):
+    root = tmp_path / "project"
+    project = ProjectService().create(root, "Export unavailable")
+    registry = ToolRegistry()
+    register_b01_tools(registry)
+
+    result = registry.execute(
+        root,
+        project.id,
+        "project.export_package",
+        "1.0.0",
+        {"format": "project_v1"},
+        "export-without-submitter",
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error["code"] == "TOOL_NOT_AVAILABLE"
+    assert result.error["recommended_action"] == "use_desktop_export"
 
 
 def test_b01_10_read_only_tool_executes_when_project_writes_are_denied(tmp_path, monkeypatch):
@@ -262,7 +283,7 @@ def test_b01_10_real_mutation_executors_return_every_frozen_semantic_dto(
     Image.new("RGB", (4, 4)).save(image)
     source = AssetService().import_file(root, project.id, image, "source_image", "import")
     registry = ToolRegistry()
-    register_b01_tools(registry)
+    register_b01_tools(registry, InMemoryJobSubmitter())
 
     def invoke(name, arguments):
         return registry.execute(

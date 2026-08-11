@@ -14,6 +14,7 @@ from aipic_to_model.agent.core.models import (
     TextContent,
     ToolCall,
     ToolResult,
+    ToolResultMessage,
     Usage,
     UserMessage,
 )
@@ -102,6 +103,38 @@ async def test_harness_rejects_second_structural_operation_while_turn_is_active(
         "user",
         "assistant",
     ]
+
+
+@pytest.mark.agent
+@pytest.mark.asyncio
+async def test_harness_continues_from_a_durable_terminal_tool_result_without_a_synthetic_user_message(
+    tmp_path,
+) -> None:
+    repository = LinearSessionRepository(tmp_path / "agent.sqlite3")
+    session = repository.create()
+    repository.append_message(
+        session.id,
+        AssistantMessage((ToolCall("paid-call", "generate_model3d", {}),), stop_reason="tool_use"),
+    )
+    repository.append_message(
+        session.id,
+        ToolResultMessage(
+            "paid-call", "generate_model3d", ToolResult((TextContent("Model ready."),))
+        ),
+    )
+    harness = AgentHarness(
+        FakeProvider((_response("The requested model is ready."),)),
+        ModelProfile("fake", "fake", "http://fake"),
+        repository,
+        session.id,
+    )
+
+    await harness.continue_run()
+
+    messages = repository.open(session.id).messages
+    assert [message.role for message in messages] == ["assistant", "tool_result", "assistant"]
+    assert isinstance(messages[-1], AssistantMessage)
+    assert messages[-1].content[0] == TextContent("The requested model is ready.")
 
 
 @pytest.mark.agent

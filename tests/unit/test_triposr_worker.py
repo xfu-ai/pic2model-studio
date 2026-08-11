@@ -104,7 +104,7 @@ def _spec(**overrides: object) -> TripoSRGenerationSpec:
         "image_bytes": _image(),
         "mime_type": "image/png",
         "chunk_size": 8192,
-        "marching_cubes_resolution": 256,
+        "marching_cubes_resolution": 512,
         "foreground_ratio": 0.85,
         "timeout_seconds": 5.0,
     }
@@ -150,7 +150,9 @@ def test_worker_uses_fixed_offline_command_and_returns_validated_glb(
         paths[TRIPOSR_MODEL_CAPABILITY]
     )
     assert command[command.index("--model-save-format") + 1] == "glb"
-    assert "--no-remove-bg" in command and "--device" in command
+    assert "--no-remove-bg" not in command and "--device" in command
+    assert command[command.index("--mc-resolution") + 1] == "512"
+    assert command[command.index("--foreground-ratio") + 1] == "0.85"
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict) and kwargs["shell"] is False
     environment = kwargs["env"]
@@ -161,7 +163,7 @@ def test_worker_uses_fixed_offline_command_and_returns_validated_glb(
     assert environment["TRANSFORMERS_OFFLINE"] == "1"
     assert environment["NO_PROXY"] == "*"
     assert "AIPIC_SECRET_TOKEN" not in environment
-    assert output.glb == _glb() and output.marching_cubes_resolution == 256
+    assert output.glb == _glb() and output.marching_cubes_resolution == 512
 
 
 @pytest.mark.parametrize("payload", [b"not-glb", b""])

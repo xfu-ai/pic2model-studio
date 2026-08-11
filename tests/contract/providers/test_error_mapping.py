@@ -8,6 +8,7 @@ from aipic_to_model.infrastructure.providers.http_errors import http_failure
 @pytest.mark.parametrize(
     ("status", "code", "recoverable", "action"),
     [
+        (400, "PROVIDER_REQUEST_INVALID", False, "fix_input"),
         (401, "PROVIDER_AUTH_FAILED", False, "configure_provider"),
         (403, "PROVIDER_AUTH_FAILED", False, "configure_provider"),
         (429, "PROVIDER_RATE_LIMITED", True, "retry"),
@@ -22,6 +23,7 @@ def test_http_errors_have_complete_stable_redacted_fields(
         status_code=status,
         request_id="safe-request-id",
         retry_after_seconds=7,
+        request_invalid=status == 400,
     )
     error = result.error
     assert error is not None

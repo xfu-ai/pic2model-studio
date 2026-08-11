@@ -14,10 +14,11 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components, type UrlTransform } from "react-markdown";
 import type {
   AgentContentBlock,
   AgentEventDto,
+  AgentExecutionPlanDto,
   AgentMessageDto,
   AgentMessagesDto,
   AgentToolResultDto,
@@ -31,8 +32,30 @@ import { HostClient, type AgentImageDropItem } from "../../shared/host/client";
 function requestId() { return crypto.randomUUID(); }
 const defaultHostClient = new HostClient();
 const initialMessageLimit = 20;
+const suspendedSendRetryDelays = [50, 100, 200, 400];
 
-const agentSystemPrompt = "You are the Pic2Model Studio desktop workflow assistant. Reply in the language of the user's latest natural-language request: Chinese input receives Chinese output, English input receives English output, and Chinese is the default when the language is ambiguous. Internal tool descriptions, runtime snapshots, and task events may be English; never let them change the user-facing reply language. Use the fixed managed facade tools for image, selection, multiview, 3D generation, preview, conversion, packaging, and durable Job requests. For image generation, write a complete prompt directly in generate_images; the desktop saves it and displays it with the generated images. When an attached image is included directly in the current multimodal message, understand it directly and do not call understand_image for the same question. When the message provides only a managed image reference, use understand_image for ordinary visual facts. Call analyze_image(content) only when the user requests a reusable content specification, analyze_image(style) only when the user requests style analysis, preservation, comparison, or reuse, and analyze_image(3d_suitability) only when the user requests or the task is genuinely uncertain about 3D readiness. Do not call content and style analysis together unless the user has separate requirements; use refresh only when the user explicitly asks to reanalyze. Paid actions must wait for the user's desktop approval. Project creation, opening, switching, import, export destinations, settings, credentials, approvals, and visual confirmations belong to the user and desktop host. Before detecting multiview regions or generating a model from multiview inputs, inspect the persisted workspace summary. If it contains a multiview set plus distinct front, side, and back crop assets confirmed by the user, treat those crops as authoritative, skip region detection, and use them directly for multiview 3D generation. The multiview_ref must be the persisted multiview set_id, never the source sheet asset ID or any crop asset ID. Images belong with a final user-facing answer, never in a tool explanation. Before presenting an existing managed image, inspect it with inspect_workspace(view=asset_details). Do not show opaque asset or Job references to the user. Never use read, write, edit, or bash to locate, inspect, read, or modify managed result assets; if a managed result is not directly inspectable through a facade Tool, report only the structured result already provided by the desktop. A Tool result with status=awaiting_ui_action means the requested desktop action has not completed yet: say that the matching workspace was opened and tell the user what must be completed there; never claim that a preview was opened, captured, confirmed, or otherwise completed until a later result explicitly confirms it. Selection references returned by multiview region detection are not asset references and must never be passed to inspect_workspace(view=asset_details). When a task terminal event arrives, continue the original user goal autonomously with the next safe Tool step; pause only for approval, a material ambiguity, or a required desktop action. After tool work is complete, always provide a concise final summary; never intentionally finish with an empty response.";
+function apiErrorCode(error: unknown) {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  return error instanceof Error ? error.message : "";
+}
+
+const agentSystemPrompt = [
+  "You are the Pic2Model Studio desktop workflow assistant.",
+  "Reply in the language of the user's latest natural-language request; Chinese is the default when ambiguous.",
+  "The Tool area uses progressively disclosed, single-operation managed Tools. When the required Tool is not active, call toolbox.status with a capability query, then toolbox.load with the exact returned Tool name; loaded schemas are callable on the next model turn.",
+  "Use image.normalize for deterministic dimensions, orientation, format, quality, and alpha changes. Use image.upscale_local for bundled offline 2x/4x super-resolution. Use image.upscale_provider only when the user explicitly requests external Provider processing or the local model is unsuitable.",
+  "When an attached image is included directly in the current multimodal message, understand it directly and do not call image.understand_for_agent for the same question. When only a managed image reference is available, use image.understand_for_agent for ordinary visual facts.",
+  "Use image.analyze_content, image.analyze_style, or image.evaluate_3d_suitability only when a persisted workflow analysis is requested or genuinely required downstream.",
+  "Paid or external actions must wait for the user's desktop approval. Project creation, opening, switching, import, export destinations, settings, credentials, approvals, and visual confirmations belong to the user and desktop host.",
+  "For multiview region detection, use project.get_state only when no current Tool Result already supplies the persisted set and crops. After desktop crop confirmation, its Tool Result is authoritative: call multiview 3D generation directly with that exact multiview_ref and front, side, back crop references. Never rediscover, substitute, or repair them through project.get_state, asset.list, filenames, or image analysis. A multiview_ref is the persisted set_id, never an image or selection reference.",
+  "Before presenting an existing managed image, use asset.get_metadata for the known asset reference. Never use read, write, edit, or bash to locate or modify managed assets. Do not show opaque asset or Job references to the user.",
+  "To place a managed image inside the final Markdown answer, write ![short descriptive label](asset:<exact_output_asset_ref>) at the intended position. Use only exact output_asset_refs returned by managed Tools; never use a filename, local path, blob URL, or remote URL for a managed image. The desktop resolves the asset reference without exposing it to the user.",
+  "A Tool result with status=awaiting_ui_action means the requested desktop action has not completed yet. Explain the required desktop action and do not claim it happened until a later result confirms it.",
+  "When a task terminal event arrives, continue the original goal with the next safe Tool step. Pause only for approval, a material ambiguity, or a required desktop action. Always finish with a concise user-facing summary.",
+].join(" ");
 
 function conversationAge(timestamp?: string) {
   const milliseconds = timestamp ? Date.parse(timestamp) : Number.NaN;
@@ -56,7 +79,66 @@ type LiveTool = {
   isError?: boolean;
 };
 
-type ConversationStatus = "ready" | "working" | "completed" | "failed";
+type ConversationStatus = "ready" | "working" | "waiting_approval" | "completed" | "failed";
+
+type PlanPresentation = {
+  label: string;
+  tone: "ready" | "working" | "review" | "failed" | "completed";
+  currentLabel: string;
+};
+
+function planPresentation(plan: AgentExecutionPlanDto): PlanPresentation {
+  if (plan.state === "waiting_user") {
+    const failed = plan.steps.find((step) => step.state === "failed");
+    return { label: "Needs your input", tone: "review", currentLabel: failed?.label ?? "Waiting for your answer" };
+  }
+  const failed = plan.steps.find((step) => step.state === "failed");
+  if (failed) return { label: "Needs attention", tone: "failed", currentLabel: failed.label };
+  if (plan.state === "completed_with_warnings") {
+    return { label: "Completed with warnings", tone: "review", currentLabel: "All planned steps finished" };
+  }
+  const review = plan.steps.find((step) => step.state === "review_required");
+  if (review) return { label: "Review required", tone: "review", currentLabel: review.label };
+  const current = plan.steps.find((step) => step.id === plan.current_step_id);
+  if (plan.state === "executing" && current?.state === "running") {
+    return { label: "In progress", tone: "working", currentLabel: current.label };
+  }
+  if (plan.state === "completed" || !current) return { label: "Completed", tone: "completed", currentLabel: "All planned steps finished" };
+  return { label: "Next step", tone: "ready", currentLabel: current.label };
+}
+
+function ExecutionPlanCard({ plan, expanded, onExpandedChange }: {
+  plan: AgentExecutionPlanDto;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+}) {
+  if (plan.fallback || !plan.steps.length) return null;
+  const presentation = planPresentation(plan);
+  const isRunning = presentation.tone === "working";
+  return <section className={`agent-execution-plan ${presentation.tone}${expanded ? " expanded" : ""}`} aria-label="Execution plan">
+    <header>
+      <div className="agent-plan-heading">
+        {isRunning ? <SpinnerGap className="spin" aria-hidden="true" /> : presentation.tone === "failed" || presentation.tone === "review" ? <WarningCircle weight="fill" aria-hidden="true" /> : presentation.tone === "completed" ? <CheckCircle weight="fill" aria-hidden="true" /> : <span className="agent-plan-dot" aria-hidden="true" />}
+        <strong>Plan</strong>
+        <span>{presentation.label}</span>
+      </div>
+      <button type="button" aria-expanded={expanded} onClick={() => onExpandedChange(!expanded)}>
+        {expanded ? <CaretDown size={14} /> : <CaretRight size={14} />}
+        {expanded ? "Hide details" : "View details"}
+      </button>
+    </header>
+    <p className="agent-plan-summary"><strong>{presentation.currentLabel}</strong><span>{plan.goal}</span></p>
+    {expanded ? <div className="agent-plan-details">
+      {plan.constraints?.length ? <p className="agent-plan-constraints">Constraints: {plan.constraints.join(" · ")}</p> : null}
+      <ol>
+        {plan.steps.map((step) => <li key={step.id} className={step.state}>
+          <span>{step.state === "succeeded" ? <CheckCircle weight="fill" /> : step.state === "review_required" || step.state === "failed" ? <WarningCircle weight="fill" /> : step.state === "running" ? <SpinnerGap className="spin" /> : <span className="agent-plan-dot" />}</span>
+          <span>{step.label}{step.warning ? ` — ${step.warning}` : ""}</span>
+        </li>)}
+      </ol>
+    </div> : null}
+  </section>;
+}
 
 function providerFailureMessage(reason?: string): string {
   switch (reason) {
@@ -187,13 +269,18 @@ function workspaceModeForJobType(jobType: string | undefined): WorkspaceMode | n
 
 function workspaceModeForCompletedTool(tool: LiveTool): WorkspaceMode | null {
   if (tool.state !== "completed" || tool.isError || tool.result?.details?.status !== "succeeded") return null;
-  if (tool.toolName === "split_image") return "target_extract";
+  if (["split_image", "image.split_alpha_components", "image.split_grid"].includes(tool.toolName)) return "target_extract";
   if (
     tool.toolName === "edit_image"
-    && ["trim_transparent", "normalize", "remove_background_local"].includes(
-      typeof tool.arguments.operation === "string" ? tool.arguments.operation : "",
-    )
-  ) return "target_extract";
+  ) {
+    const operation = typeof tool.arguments.operation === "string"
+      ? tool.arguments.operation
+      : "";
+    if (operation === "normalize") return "image";
+    if (["trim_transparent", "remove_background_local"].includes(operation)) return "target_extract";
+  }
+  if (tool.toolName === "image.normalize") return "image";
+  if (["image.trim_transparent", "image.remove_background_local"].includes(tool.toolName)) return "target_extract";
   return null;
 }
 
@@ -259,8 +346,156 @@ function textContent(content: AgentContentBlock[] | undefined) {
     .join("\n");
 }
 
-function MarkdownContent({ children }: { children: string }) {
-  return <ReactMarkdown>{children}</ReactMarkdown>;
+function visibleAssistantText(text: string) {
+  // Older conversations may contain the now-retired model-authored outline.
+  // The durable structured Plan card is the single user-visible planning surface.
+  return text.replace(/<execution_outline>[\s\S]*?<\/execution_outline>\s*/gi, "").trim();
+}
+
+const chatImageAssetTypes = new Set(["generated_image", "source_image", "annotation", "crop", "multiview", "preview"]);
+const maxChatImageAttachments = 4;
+const maxAgentInputAttachments = 8;
+const agentImageExtensions = new Set(["png", "jpg", "jpeg", "bmp", "webp"]);
+const managedImagePrefixes = ["managed-asset://", "asset://", "asset:"];
+
+function decodedMarkdownImageSource(source: string) {
+  const trimmed = source.trim().replace(/^<|>$/g, "");
+  try {
+    return decodeURIComponent(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+function managedImageCandidate(source: string) {
+  const decoded = decodedMarkdownImageSource(source);
+  const prefix = managedImagePrefixes.find((item) => decoded.toLowerCase().startsWith(item));
+  return (prefix ? decoded.slice(prefix.length) : decoded).split(/[?#]/, 1)[0].trim();
+}
+
+function managedAssetFromMarkdownSource(source: string | undefined, assets: AssetDto[]) {
+  if (!source) return undefined;
+  const candidate = managedImageCandidate(source);
+  const exactId = assets.find((asset) => asset.id === candidate);
+  if (exactId) return exactId;
+  const fileName = candidate.replace(/\\/g, "/").split("/").pop();
+  if (!fileName) return undefined;
+  const matchingNames = assets.filter((asset) => asset.name === fileName);
+  return matchingNames.length === 1 ? matchingNames[0] : undefined;
+}
+
+function markdownImageSources(markdown: string) {
+  const sources: string[] = [];
+  const pattern = /!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))/g;
+  for (const match of markdown.matchAll(pattern)) {
+    const source = match[1] ?? match[2];
+    if (source) sources.push(source);
+  }
+  return sources;
+}
+
+const managedMarkdownUrlTransform: UrlTransform = (url, key, node) => {
+  if (key === "src" && node.tagName === "img" && managedImagePrefixes.some((prefix) => url.toLowerCase().startsWith(prefix))) {
+    return url;
+  }
+  return defaultUrlTransform(url);
+};
+
+function useChatImageAssets(projectId: string | undefined, api: ApiClient | undefined, assetIds: string[]) {
+  const [assets, setAssets] = useState<AssetDto[]>([]);
+  const stableIds = assetIds.join(",");
+
+  useEffect(() => {
+    let active = true;
+    if (!projectId || !api || !assetIds.length) {
+      setAssets([]);
+      return () => { active = false; };
+    }
+    void api.assets(projectId).then((allAssets) => {
+      if (!active) return;
+      const byId = new Map(allAssets.map((asset) => [asset.id, asset]));
+      setAssets(assetIds.map((id) => byId.get(id)).filter((asset): asset is AssetDto => Boolean(asset) && chatImageAssetTypes.has(asset!.asset_type)));
+    }).catch(() => { if (active) setAssets([]); });
+    return () => { active = false; };
+  }, [api, projectId, stableIds]); // assetIds is reconstructed from durable messages on each render.
+
+  return assets;
+}
+
+function useAssetPreviewUrl(projectId: string, api: ApiClient, asset: AssetDto) {
+  const [url, setUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    let objectUrl = "";
+    setUrl("");
+    setFailed(false);
+    const load = async () => {
+      let blob: Blob;
+      if (typeof api.assetThumbnail === "function") {
+        try {
+          blob = await api.assetThumbnail(projectId, asset.id, controller.signal);
+        } catch {
+          if (controller.signal.aborted) return;
+          blob = await api.assetContent(projectId, asset.id, controller.signal);
+        }
+      } else {
+        blob = await api.assetContent(projectId, asset.id, controller.signal);
+      }
+      if (!blob.type.startsWith("image/")) throw new Error("Managed asset is not an image");
+      objectUrl = URL.createObjectURL(blob);
+      if (active) setUrl(objectUrl);
+    };
+    void load().catch(() => { if (active && !controller.signal.aborted) setFailed(true); });
+    return () => {
+      active = false;
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [api, asset.id, projectId]);
+
+  return { url, failed };
+}
+
+function InlineManagedImage({ projectId, api, asset, alt }: {
+  projectId: string;
+  api: ApiClient;
+  asset: AssetDto | undefined;
+  alt?: string;
+}) {
+  if (!asset) return <span className="agent-inline-image unavailable" role="note">{alt || "Image preview unavailable"}</span>;
+  return <InlineManagedImageAsset projectId={projectId} api={api} asset={asset} alt={alt} />;
+}
+
+function InlineManagedImageAsset({ projectId, api, asset, alt }: {
+  projectId: string;
+  api: ApiClient;
+  asset: AssetDto;
+  alt?: string;
+}) {
+  const { url, failed } = useAssetPreviewUrl(projectId, api, asset);
+  const label = alt?.trim() || asset.name;
+  if (failed) return <span className="agent-inline-image unavailable" role="note">{label}</span>;
+  return <span className={`agent-inline-image${url ? "" : " loading"}`}>
+    {url ? <img src={url} alt={label} /> : <span aria-label={`Loading image: ${label}`} />}
+    <small title={label}>{label}</small>
+  </span>;
+}
+
+function MarkdownContent({ children, projectId, api, imageAssets = [] }: {
+  children: string;
+  projectId?: string;
+  api?: ApiClient;
+  imageAssets?: AssetDto[];
+}) {
+  const components: Components = {
+    img: ({ src, alt }) => projectId && api
+      ? <InlineManagedImage projectId={projectId} api={api} asset={managedAssetFromMarkdownSource(src, imageAssets)} alt={alt ?? undefined} />
+      : <span className="agent-inline-image unavailable" role="note">{alt || "Image preview unavailable"}</span>,
+  };
+  return <ReactMarkdown components={components} urlTransform={managedMarkdownUrlTransform}>{children}</ReactMarkdown>;
 }
 
 function toolPreview(toolName: string, result: AgentToolResultDto | undefined) {
@@ -315,6 +550,7 @@ function AssistantMessage({ message, streamingText, projectId, api, imageAssetId
   api?: ApiClient;
   imageAssetIds?: string[];
 }) {
+  const managedAssets = useChatImageAssets(projectId, api, imageAssetIds ?? []);
   const blocks = streamingText === undefined
     ? contentBlocks(message)
     : [
@@ -325,8 +561,9 @@ function AssistantMessage({ message, streamingText, projectId, api, imageAssetId
   const rendered: ReactNode[] = [];
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index];
-    if (block.type === "text" && block.text.trim()) {
-      rendered.push(<div className="agent-assistant-text" key={`text-${index}`}><MarkdownContent>{block.text.trim()}</MarkdownContent></div>);
+    const visibleText = block.type === "text" ? visibleAssistantText(block.text) : "";
+    if (visibleText) {
+      rendered.push(<div className="agent-assistant-text" key={`text-${index}`}><MarkdownContent projectId={projectId} api={api} imageAssets={managedAssets}>{visibleText}</MarkdownContent></div>);
       continue;
     }
   }
@@ -338,7 +575,7 @@ function AssistantMessage({ message, streamingText, projectId, api, imageAssetId
     </header>
     <div className="agent-assistant-content">
       {rendered}
-      {projectId && api && imageAssetIds?.length ? <ChatImages projectId={projectId} api={api} assetIds={imageAssetIds} /> : null}
+      {projectId && api && managedAssets.length ? <ChatImages projectId={projectId} api={api} assets={managedAssets.filter((asset) => !renderedMarkdownAssetIds(blocks, managedAssets).has(asset.id))} /> : null}
     </div>
   </article>;
 }
@@ -364,50 +601,13 @@ function UserMessage({ message, projectId, api }: { message: AgentMessageDto; pr
   </article>;
 }
 
-const chatImageAssetTypes = new Set(["generated_image", "source_image", "annotation", "crop", "multiview", "preview"]);
-const maxChatImageAttachments = 4;
-const maxAgentInputAttachments = 8;
-const agentImageExtensions = new Set(["png", "jpg", "jpeg", "bmp", "webp"]);
-
 function ChatImage({ projectId, api, asset }: { projectId: string; api: ApiClient; asset: AssetDto }) {
-  const [url, setUrl] = useState("");
-
-  useEffect(() => {
-    let active = true;
-    let objectUrl = "";
-    void api.assetContent(projectId, asset.id).then((blob) => {
-      if (!blob.type.startsWith("image/")) return;
-      objectUrl = URL.createObjectURL(blob);
-      if (active) setUrl(objectUrl);
-    }).catch(() => undefined);
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [api, asset.id, projectId]);
-
-  if (!url) return null;
+  const { url, failed } = useAssetPreviewUrl(projectId, api, asset);
+  if (!url) return failed ? <span className="agent-chat-image-error">{asset.name} could not be previewed.</span> : null;
   return <figure className="agent-chat-image"><img src={url} alt={`Project image: ${asset.name}`} /><figcaption>{asset.name}</figcaption></figure>;
 }
 
-function ChatImages({ projectId, api, assetIds }: { projectId: string; api: ApiClient; assetIds: string[] }) {
-  const [assets, setAssets] = useState<AssetDto[]>([]);
-  const stableIds = assetIds.join(",");
-
-  useEffect(() => {
-    let active = true;
-    if (!assetIds.length) {
-      setAssets([]);
-      return () => { active = false; };
-    }
-    void api.assets(projectId).then((allAssets) => {
-      if (!active) return;
-      const byId = new Map(allAssets.map((asset) => [asset.id, asset]));
-      setAssets(assetIds.map((id) => byId.get(id)).filter((asset): asset is AssetDto => Boolean(asset) && chatImageAssetTypes.has(asset!.asset_type)));
-    }).catch(() => { if (active) setAssets([]); });
-    return () => { active = false; };
-  }, [api, projectId, stableIds]); // assetIds is reconstructed from durable messages on each render.
-
+function ChatImages({ projectId, api, assets }: { projectId: string; api: ApiClient; assets: AssetDto[] }) {
   if (!assets.length) return null;
   const visible = assets.slice(0, maxChatImageAttachments);
   return <section className="agent-chat-images" aria-label="Project images"><p>Images</p><div>{visible.map((asset) => <ChatImage key={asset.id} projectId={projectId} api={api} asset={asset} />)}</div>{assets.length > visible.length && <small>{assets.length - visible.length} more images are available in Assets.</small>}</section>;
@@ -418,30 +618,35 @@ function outputAssetIds(message: AgentMessageDto | undefined) {
 }
 
 function completedJobResult(message: AgentMessageDto) {
-  if (message.role !== "user") return null;
-  const text = textContent(contentBlocks(message));
-  const match = /^Task job_id=([^\s]+) completed, result_(asset|selection)_ids=([^.]*)\./.exec(text);
-  if (!match) return null;
-  return {
-    jobId: match[1],
-    assetIds: match[2] === "asset" ? match[3].split(",").filter((id) => id && id !== "none") : [],
-  };
+  const jobId = message.details?.job?.job_id;
+  const assetIds = message.details?.output_asset_ids;
+  return typeof jobId === "string" && Array.isArray(assetIds)
+    ? { jobId, assetIds: assetIds.filter((id): id is string => typeof id === "string" && id.length > 0) }
+    : null;
+}
+
+function renderedMarkdownAssetIds(blocks: AgentContentBlock[], assets: AssetDto[]) {
+  const ids = new Set<string>();
+  for (const block of blocks) {
+    if (block.type !== "text") continue;
+    for (const source of markdownImageSources(block.text)) {
+      const asset = managedAssetFromMarkdownSource(source, assets);
+      if (asset) ids.add(asset.id);
+    }
+  }
+  return ids;
 }
 
 function terminalJobId(message: AgentMessageDto) {
-  if (message.role !== "user") return null;
-  return /^Task job_id=([^\s]+) (?:completed|ended with status=)/.exec(
-    textContent(contentBlocks(message)),
-  )?.[1] ?? null;
+  return (message.details?.status === "succeeded" || message.details?.status === "failed")
+    ? message.details?.job?.job_id ?? null
+    : null;
 }
 
 function queuedJobId(message: AgentMessageDto) {
   const detailed = message.details?.job?.job_id;
   if (detailed && message.details?.status === "queued") return detailed;
-  if (message.role !== "user") return null;
-  return /The user approved the external operation; job_id=([^\s.]+)/.exec(
-    textContent(contentBlocks(message)),
-  )?.[1] ?? null;
+  return null;
 }
 
 function pendingJobFromMessages(messages: AgentMessageDto[]) {
@@ -477,13 +682,7 @@ function pendingJobWorkspaceActionFromMessages(messages: AgentMessageDto[], jobI
 }
 
 function isInternalJobContinuation(message: AgentMessageDto) {
-  return Boolean(terminalJobId(message))
-    || (
-      message.role === "user"
-      && textContent(contentBlocks(message)).startsWith(
-        "The user approved the external operation",
-      )
-    );
+  return Boolean(terminalJobId(message));
 }
 
 function finalAssistantImageAssetIds(messages: AgentMessageDto[], assistantIndex: number) {
@@ -494,16 +693,25 @@ function finalAssistantImageAssetIds(messages: AgentMessageDto[], assistantIndex
     || message.stop_reason === "aborted"
     || contentBlocks(message).some((block) => block.type === "tool_call")
   ) return [];
+  const outputGroups: string[][] = [];
   for (let index = assistantIndex - 1; index >= 0; index -= 1) {
     const prior = messages[index];
     const completedJob = completedJobResult(prior);
-    if (completedJob) return completedJob.assetIds;
-    if (prior.role === "user") return [];
+    if (completedJob) {
+      if (completedJob.assetIds.length) outputGroups.push(completedJob.assetIds);
+      continue;
+    }
+    if (prior.role === "user") break;
     if (prior.role !== "tool_result" || prior.is_error || prior.tool_name === "asset.list") continue;
     const assetIds = outputAssetIds(prior);
-    if (assetIds.length) return assetIds;
+    if (assetIds.length) outputGroups.push(assetIds);
   }
-  return [];
+  const seen = new Set<string>();
+  return outputGroups.reverse().flat().filter((id) => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 function ToolExecution({ tool, expanded, children }: { tool: LiveTool; expanded: boolean; children?: ReactNode }) {
@@ -537,6 +745,9 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentMessageDto[]>([]);
   const [liveTools, setLiveTools] = useState<Record<string, LiveTool>>({});
+  const [executionPlan, setExecutionPlan] = useState<AgentExecutionPlanDto | null>(null);
+  const [planExpanded, setPlanExpanded] = useState(false);
+  const [planning, setPlanning] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<AssetDto[]>([]);
@@ -570,14 +781,50 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
   const nativeDropHandler = useRef<(items: AgentImageDropItem[]) => void>(() => undefined);
   const loadingOlderMessagesRef = useRef(false);
   const prependScrollAnchor = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  // The desktop shell can rerender while workspace state is being persisted.
+  // Keep the poll cadence durable across such renders so a recreated effect
+  // cannot turn its immediate poll into a request loop.
+  const eventPollInFlight = useRef(false);
+  const nextEventPollAt = useRef(0);
   const eventApi = (api as Partial<ApiClient>).agentEvents;
   const liveToolsById = useMemo(() => new Map(Object.values(liveTools).map((tool) => [tool.id, tool])), [liveTools]);
+
+  const restorePendingUiActions = useCallback((page: AgentMessagesDto) => {
+    const pending = page.pending_ui_actions ?? [];
+    const pendingIds = new Set(pending.map((action) => action.tool_call_id));
+    setLiveTools((tools) => {
+      const synchronized = Object.fromEntries(Object.entries(tools).filter(([toolCallId, tool]) => (
+        tool.result?.details?.status !== "awaiting_ui_action" || pendingIds.has(toolCallId)
+      )));
+      for (const action of pending) {
+        if (!action.tool_call_id || !action.tool_name || !action.result) continue;
+        synchronized[action.tool_call_id] = {
+          id: action.tool_call_id,
+          toolName: action.tool_name,
+          arguments: tools[action.tool_call_id]?.arguments ?? {},
+          state: "completed",
+          isError: Boolean(action.result.is_error),
+          result: action.result,
+        };
+      }
+      return synchronized;
+    });
+  }, []);
 
   const applyLatestMessagePage = useCallback((page: AgentMessagesDto) => {
     setMessages(page.items);
     setHistoryBefore(page.next_before ?? null);
     setHasOlderMessages(Boolean(page.has_more));
-  }, []);
+    restorePendingUiActions(page);
+    setExecutionPlan(page.execution_plan ?? null);
+    const hasPendingUiAction = (page.pending_ui_actions?.length ?? 0) > 0;
+    if (hasPendingUiAction) {
+      setBusy(false);
+      setConversationStatus("waiting_approval");
+    } else {
+      setConversationStatus((status) => status === "waiting_approval" ? "ready" : status);
+    }
+  }, [restorePendingUiActions]);
 
   const rememberExistingWorkspaceActions = useCallback((items: AgentMessageDto[]) => {
     handledWorkspaceActions.current = new Set(
@@ -630,6 +877,9 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
     loadingOlderMessagesRef.current = false;
     prependScrollAnchor.current = null;
     setLiveTools({});
+    setExecutionPlan(null);
+    setPlanExpanded(false);
+    setPlanning(false);
     toolArguments.current.clear();
     suppressedJobTerminalNotifications.current.clear();
     setStreamingText("");
@@ -725,10 +975,23 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
   useEffect(() => {
     if (!conversationId || typeof eventApi !== "function") return;
     let live = true;
-    let polling = false;
     const process = (event: AgentEventDto) => {
       const payload = event.payload;
-      if (event.event_type === "message.started") setStreamingText("");
+      if (event.event_type === "message.started") {
+        setStreamingText("");
+        setBusy(true);
+        setConversationStatus("working");
+      }
+      if (event.event_type === "message.accepted") setError("");
+      if (event.event_type === "execution.planning.started") {
+        setError("");
+        setPlanning(true);
+      }
+      if (event.event_type === "execution.plan.updated" && payload.plan) {
+        setExecutionPlan(payload.plan);
+        setPlanExpanded(false);
+        setPlanning(false);
+      }
       if (event.event_type === "message.delta") setStreamingText((text) => text + (payload.text ?? ""));
       if (event.event_type === "message.completed" && payload.message) {
         setMessages((items) => upsertMessage(items, payload.message!));
@@ -819,15 +1082,23 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       }
       if (event.event_type === "agent.idle") {
         setStreamingText("");
-        setLiveTools({});
         void api.agentMessages(projectId, conversationId, initialMessageLimit).then((result) => {
           if (live) applyLatestMessagePage(result);
         }).catch(() => { if (live) setError("The Agent stopped, but its conversation could not be refreshed."); });
       }
+      if (event.event_type === "conversation.suspended") {
+        setStreamingText("");
+        setPlanning(false);
+        setBusy(false);
+        setConversationStatus("waiting_approval");
+        void refreshConversations().catch(() => undefined);
+      }
       if (event.event_type === "conversation.completed") {
         setStreamingText("");
+        setPlanning(false);
         setLiveTools({});
         setBusy(false);
+        setError("");
         setConversationStatus("completed");
         void api.agentMessages(projectId, conversationId, initialMessageLimit).then((result) => {
           if (live) applyLatestMessagePage(result);
@@ -836,7 +1107,10 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       }
       if (event.event_type === "conversation.failed") {
         setStreamingText("");
-        setLiveTools({});
+        setPlanning(false);
+      setLiveTools({});
+      setExecutionPlan(null);
+      setPlanning(false);
         setBusy(false);
         setConversationStatus("failed");
         setError(providerFailureMessage(payload.reason));
@@ -847,8 +1121,10 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       }
     };
     const poll = async () => {
-      if (polling) return;
-      polling = true;
+      const now = Date.now();
+      if (eventPollInFlight.current || now < nextEventPollAt.current) return;
+      eventPollInFlight.current = true;
+      nextEventPollAt.current = now + 250;
       try {
         const page = await eventApi.call(api, projectId, conversationId, eventCursor.current);
         if (!live) return;
@@ -857,7 +1133,7 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       } catch {
         // A later replay request resumes from the durable event cursor.
       } finally {
-        polling = false;
+        eventPollInFlight.current = false;
       }
     };
     void poll();
@@ -936,7 +1212,7 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
           : undefined;
         onWorkspaceAction?.({
           ...workspaceRequest(completedMode, undefined, tool.arguments),
-          jobType: tool.toolName === "split_image"
+          jobType: ["split_image", "image.split_alpha_components", "image.split_grid"].includes(tool.toolName)
             ? "image.split_local"
             : operation
               ? `${tool.toolName}.${operation}`
@@ -968,14 +1244,6 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
         // real terminal result.
         if (!terminal || !live) return;
         sending = true;
-        setBusy(true);
-        const completion = job.status === "succeeded"
-          ? job.job_type === "multiview.detect_regions"
-            ? `Task job_id=${job.id} completed, result_selection_ids=${job.output_asset_ids.join(",") || "none"}. These are selection references, not asset references. Continue the original user goal autonomously: take the next safe Tool step when one remains. Pause only for approval, a material ambiguity, or a required desktop action.`
-            : `Task job_id=${job.id} completed, result_asset_ids=${job.output_asset_ids.join(",") || "none"}. Continue the original user goal autonomously: take the next safe Tool step when one remains. Pause only for approval, a material ambiguity, or a required desktop action. Do not expose opaque references in the final user-facing response.`
-          : `Task job_id=${job.id} ended with status=${job.status}, error=${job.error?.user_message ?? "none"}. Explain the reason and provide a continuation path.`;
-        await api.sendAgentMessage(projectId, conversationId, completion, `agent-job-terminal-${job.id}`, typeof eventApi === "function" ? false : true);
-        if (!live) return;
         if (job.status === "succeeded") {
           const resultMode = pendingJobWorkspaceMode ?? workspaceModeForJobType(job.job_type);
           const pendingWorkspaceAction = pendingJobWorkspaceAction ?? pendingJobWorkspaceActionRef.current;
@@ -1002,14 +1270,9 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
         setPendingJobWorkspaceMode(null);
         setPendingJobWorkspaceAction(null);
         pendingJobWorkspaceActionRef.current = null;
-        if (typeof eventApi !== "function") {
-          const updated = await api.agentMessages(projectId, conversationId, initialMessageLimit);
-          if (live) applyLatestMessagePage(updated);
-        }
       } catch {
         // The task center remains authoritative; transient polling failures are retried.
       } finally {
-        if (live && typeof eventApi !== "function") setBusy(false);
         sending = false;
       }
     };
@@ -1022,13 +1285,16 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
     if ((!draft.trim() && !attachments.length) || !conversationId || busy || switching || attachmentBusy) return;
     const content = draft.trim() || "Use the attached images as inputs.";
     const sentAttachments = attachments;
+    const optimisticMessageId = requestId();
+    const priorConversationStatus = conversationStatus;
     setDraft("");
     setAttachments([]);
     setBusy(true);
+    setPlanning(false);
     setError("");
     setConversationStatus("working");
     setMessages((items) => [...items, {
-      id: requestId(),
+      id: optimisticMessageId,
       role: "user",
       content,
       attachments: sentAttachments.map((attachment) => ({
@@ -1038,34 +1304,63 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       })),
     }]);
     try {
+      // A replacement instruction entered while an approval is visible means
+      // the pending external action must not run. Close those suspended Tool
+      // Calls before starting the new turn so the model transcript remains
+      // ordered (Tool Result before the replacement User message).
+      const pendingApprovalIds = Object.values(liveTools)
+        .map((tool) => tool.result?.details?.ui_action)
+        .filter((action) => action?.type === "approval_required" || action?.type === "confirm_external_paid")
+        .map((action) => action!.action_id)
+        .filter((approvalId): approvalId is string => (
+          typeof approvalId === "string" && approvalId.length > 0 && !approvalState[approvalId]
+        ));
+      for (const approvalId of [...new Set(pendingApprovalIds)]) {
+        setApprovalState((state) => ({ ...state, [approvalId]: "Submitting…" }));
+        await api.decideApproval(projectId, approvalId, false, requestId());
+        setApprovalState((state) => ({
+          ...state,
+          [approvalId]: "The external operation was declined by your new instruction.",
+        }));
+      }
+
       const sendRequestId = requestId();
-      if (sentAttachments.length) {
-        await api.sendAgentMessage(
-          projectId,
-          conversationId,
-          content,
-          sendRequestId,
-          typeof eventApi === "function" ? false : true,
-          sentAttachments.map((attachment) => attachment.id),
-        );
-      } else {
-        await api.sendAgentMessage(
-          projectId,
-          conversationId,
-          content,
-          sendRequestId,
-          typeof eventApi === "function" ? false : true,
-        );
+      const submit = () => api.sendAgentMessage(
+        projectId,
+        conversationId,
+        content,
+        sendRequestId,
+        typeof eventApi === "function" ? false : true,
+        sentAttachments.map((attachment) => attachment.id),
+      );
+      let retryIndex = 0;
+      while (true) {
+        try {
+          await submit();
+          break;
+        } catch (error) {
+          if (apiErrorCode(error) !== "AGENT_BUSY" || retryIndex >= suspendedSendRetryDelays.length) {
+            throw error;
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, suspendedSendRetryDelays[retryIndex]));
+          retryIndex += 1;
+        }
       }
       const result = await api.agentMessages(projectId, conversationId, initialMessageLimit);
       applyLatestMessagePage(result);
       if (typeof eventApi !== "function") setBusy(false);
-    } catch {
+    } catch (sendError) {
+      setMessages((items) => items.filter((message) => message.id !== optimisticMessageId));
       setDraft(content);
       setAttachments(sentAttachments);
       setBusy(false);
-      setConversationStatus("failed");
-      setError("The Agent could not complete this request. Check the model settings and try again.");
+      if (apiErrorCode(sendError) === "AGENT_BUSY") {
+        setConversationStatus(priorConversationStatus);
+        setError("The Agent is still finishing the previous step. Your message was kept below; send it again in a moment.");
+      } else {
+        setConversationStatus("failed");
+        setError("The Agent could not complete this request. Check the model settings and try again.");
+      }
     }
   };
 
@@ -1204,7 +1499,10 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
         ...state,
         [approvalId]: approved ? (result.status === "queued" ? `Approved; task queued${result.job?.job_id ? ` (${result.job.job_id})` : ""}.` : result.summary) : "The external operation was declined.",
       }));
-      if (approved && conversationId) {
+      setBusy(false);
+      setPlanning(false);
+      setConversationStatus("ready");
+      if (approved) {
         const queuedJobId = result.status === "queued" ? result.job?.job_id : undefined;
         if (queuedJobId) {
           const queuedWorkspaceAction = approvalWorkspaceContext.current.get(approvalId);
@@ -1218,27 +1516,6 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
           setPendingJobWorkspaceAction(actionWithJob);
           if (actionWithJob) onWorkspaceAction?.(actionWithJob);
           onJobQueued?.(queuedJobId, workspaceMode, result.job?.job_type);
-        }
-        setBusy(true);
-        const continuation = result.status === "queued"
-          ? `The user approved the external operation${queuedJobId ? `; job_id=${queuedJobId}` : ""}. Follow the task and continue with preview, conversion, or export once it completes.`
-          : `The user approved the external operation. Approval result: ${result.summary}. Continue the request.`;
-        try {
-          await api.sendAgentMessage(projectId, conversationId, continuation, requestId(), typeof eventApi === "function" ? false : true);
-        } catch (error) {
-          // The approval can race with the Agent's final explanation of the
-          // approval request. A queued Job is already durable, so keep
-          // monitoring it instead of misreporting the successful approval.
-          if (!queuedJobId) throw error;
-        }
-        if (typeof eventApi !== "function") {
-          const afterApproval = await api.agentMessages(
-            projectId,
-            conversationId,
-            initialMessageLimit,
-          );
-          applyLatestMessagePage(afterApproval);
-          setBusy(false);
         }
       }
     } catch {
@@ -1303,7 +1580,7 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
     if (!renderedCallIds.has(tool.id)) transcript.push(<ToolExecution key={`live-tool-${tool.id}`} tool={tool} expanded={expanded}>{toolActions(resultMessage(tool), tool.arguments)}</ToolExecution>);
   }
 
-  return <div className="agent-live-panel">
+  return <div className={`agent-live-panel${executionPlan && !executionPlan.fallback && executionPlan.steps.length > 0 ? " has-plan" : ""}`}>
     <div className="agent-session-toolbar">
       <div className="agent-session-actions">
         <button type="button" aria-label="Conversation history" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)} title="Conversation history"><ClockCounterClockwise size={17} />History</button>
@@ -1330,6 +1607,9 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
         </div> : <p>No saved conversations yet.</p>}
       </section>}
     </div>
+    {executionPlan && !executionPlan.fallback && executionPlan.steps.length > 0 && <div className="agent-plan-region">
+      <ExecutionPlanCard plan={executionPlan} expanded={planExpanded} onExpandedChange={setPlanExpanded} />
+    </div>}
     <div className="agent-conversation" ref={conversationRef} aria-live="polite" onScroll={handleConversationScroll}>
       {loadingOlderMessages && <p className="agent-history-loading" role="status">Loading earlier messages…</p>}
       {!hasOlderMessages && historyBefore === null && messages.length >= initialMessageLimit
@@ -1339,11 +1619,15 @@ export function AgentPanel({ projectId, api, host = defaultHostClient, onJobQueu
       {transcript.length ? transcript : <p className="agent-empty-state">Describe the model you want to make, or ask the Agent to continue with the current asset.</p>}
       {streamingText && <AssistantMessage message={{ id: "streaming", role: "assistant", content: "" }} streamingText={streamingText} />}
       <p className={`agent-run-status ${conversationStatus}`} role="status">
-        {conversationStatus === "working" && <><SpinnerGap className="spin" /> Agent is working…</>}
+        {conversationStatus === "working" && <>{planning ? <><SpinnerGap className="spin" /> Understanding the task and preparing a plan…</> : <><SpinnerGap className="spin" /> Agent is working…</>}</>}
+        {!pendingJobId && conversationStatus === "waiting_approval" && "Waiting for your approval to continue this external action."}
         {pendingJobId && !busy && "Background task is running. You can keep using the Agent; it will continue here when the task finishes."}
-        {!pendingJobId && conversationStatus === "completed" && "Agent completed this response."}
+        {!pendingJobId && conversationStatus === "completed" && executionPlan?.state === "waiting_user" && "Agent is waiting for your decision before it can continue."}
+        {!pendingJobId && conversationStatus === "completed" && executionPlan?.state !== "waiting_user" && executionPlan?.steps.some((step) => step.state === "failed") && "This response is complete. The plan needs attention before it can continue."}
+        {!pendingJobId && conversationStatus === "completed" && !executionPlan?.steps.some((step) => step.state === "failed") && executionPlan?.state === "completed_with_warnings" && "Agent completed this response with warnings."}
+        {!pendingJobId && conversationStatus === "completed" && executionPlan?.state !== "waiting_user" && !(executionPlan?.steps.some((step) => step.state === "failed") || executionPlan?.state === "completed_with_warnings") && "Agent completed this response."}
         {conversationStatus === "failed" && "Agent stopped before completing this response. You can try again."}
-        {conversationStatus === "ready" && "Agent is ready."}
+        {!pendingJobId && conversationStatus === "ready" && "Agent is ready."}
       </p>
       {error && <p className="agent-error">{error}</p>}
     </div>

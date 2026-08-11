@@ -1,0 +1,47 @@
+{
+  "fixture_version": 1,
+  "provider": "controlled-offline",
+  "project": {
+    "id": "fixture-project",
+    "reference_asset_ref": "asset-reference-cyberpunk"
+  },
+  "historical_assets": [
+    {
+      "id": "asset-old-same-name-1",
+      "name": "component-sheet.png",
+      "created_at": "2026-07-01T00:00:00Z"
+    },
+    {
+      "id": "asset-old-same-name-2",
+      "name": "component-sheet.png",
+      "created_at": "2026-07-02T00:00:00Z"
+    }
+  ],
+  "controlled_job": {
+    "job_ref": "job-controlled-image-transform",
+    "terminal_after_seconds": 1,
+    "output_asset_refs": ["asset-transform-output"]
+  },
+  "scenarios": {
+    "approval_early_continuation": {
+      "legacy_continuation": "The user approved the external operation; job_id=job-controlled-image-transform. Follow the task and continue with preview, conversion, or export once it completes.",
+      "expected": "approval is sideband-only until the original tool call receives its terminal result"
+    },
+    "known_output_asset": {
+      "tool_result_output_asset_refs": ["asset-transform-output"],
+      "legacy_wrong_ref": "asset-old-same-name-2",
+      "expected": "the next dependent tool uses asset-transform-output exactly"
+    },
+    "reference_image_revision": {
+      "initial_mode": "from_image",
+      "source_asset_ref": "asset-reference-cyberpunk",
+      "revision": "改成白底，其他不变",
+      "expected_mode": "from_image",
+      "expected_source_asset_ref": "asset-reference-cyberpunk"
+    },
+    "qwen_text_tool_json": {
+      "text": "{\"name\":\"edit_image\",\"arguments\":{\"operation\":\"remove_background\",\"source_asset_ref\":\"asset-reference-cyberpunk\"}}",
+      "expected": "request one native-tool-call correction; never execute this text directly"
+    }
+  }
+}

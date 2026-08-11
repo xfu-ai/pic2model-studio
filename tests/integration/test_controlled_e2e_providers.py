@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import json
+from pathlib import Path
 
 from PIL import Image
 
@@ -19,6 +19,11 @@ def test_controlled_e2e_mode_completes_tripo_without_a_real_provider(
 
     monkeypatch.setenv("AIPIC_CONTROLLED_E2E", "1")
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
+    # Exercise the controlled remote Tripo fixture even when local TripoSR is
+    # installed on the validation host.
+    dependencies.settings.update_app(
+        dependencies.app_db, {"model3d_generation_backend": "remote"}
+    )
     root = tmp_path / "project"
     project = dependencies.projects.create(root, "Controlled provider project")
     source = tmp_path / "source.png"
@@ -34,7 +39,7 @@ def test_controlled_e2e_mode_completes_tripo_without_a_real_provider(
             "mode": "image",
             "image_asset_id": image["id"],
             "provider_profile": "tripo3d/default",
-            "model": "tripo-v2.5-20250123",
+            "model": "v3.1-20260211",
             "parameters": {},
         },
         "controlled-tripo-request",
@@ -70,6 +75,9 @@ def test_controlled_e2e_mode_completes_tripo_without_a_real_provider(
 def test_controlled_e2e_mode_generates_valid_image_candidates(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AIPIC_CONTROLLED_E2E", "1")
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
+    dependencies.settings.update_app(
+        dependencies.app_db, {"image_generation_backend": "remote"}
+    )
     root = tmp_path / "project"
     project = dependencies.projects.create(root, "Controlled image project")
     prompt_file = tmp_path / "prompt.json"

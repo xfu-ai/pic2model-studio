@@ -40,6 +40,39 @@ async def test_manual_compaction_persists_record_and_reopens_projection(tmp_path
 
 @pytest.mark.agent
 @pytest.mark.asyncio
+async def test_compaction_preserves_latest_execution_outline_verbatim(tmp_path) -> None:
+    repository = LinearSessionRepository(tmp_path / "agent.sqlite3")
+    session = repository.create(system_prompt="system")
+    outline = """<execution_outline>
+goal: preserve reference image
+steps:
+  1. generate_images <- user_attachment:reference
+  2. edit_image <- tool_output:1
+current: 1
+constraints: from_image; 3×4; 12 components
+</execution_outline>"""
+    repository.append_message(session.id, UserMessage("transform this"))
+    repository.append_message(session.id, AssistantMessage((TextContent(outline),)))
+    repository.append_message(session.id, UserMessage("continue"))
+    repository.append_message(session.id, AssistantMessage((TextContent("working"),)))
+    harness = AgentHarness(
+        FakeProvider(()),
+        ModelProfile("fake", "fake", "http://fake"),
+        repository,
+        session.id,
+        compaction_settings=CompactionSettings(keep_recent_tokens=1),
+        summarizer=lambda _input: "summary without an outline",
+    )
+
+    assert await harness.compact()
+    record = repository.latest_compaction(session.id)
+
+    assert record is not None and record.summary is not None
+    assert outline in record.summary
+
+
+@pytest.mark.agent
+@pytest.mark.asyncio
 async def test_before_compact_hook_can_cancel_without_changing_raw_context(tmp_path) -> None:
     repository = LinearSessionRepository(tmp_path / "agent.sqlite3")
     session = repository.create()

@@ -77,6 +77,90 @@ def test_local_color_key_removes_only_edge_connected_background() -> None:
     assert image.getpixel((0, 0))[3] == 0
     assert image.getpixel((4, 4))[3] == 255
     assert image.getpixel((5, 5))[3] == 255
+    verification = result.metadata["verification"]
+    assert isinstance(verification, dict)
+    assert verification["disposition"] == "verified"
+
+
+def test_background_removal_requires_review_when_opaque_keyed_corners_remain() -> None:
+    source = Image.new("RGBA", (20, 20), (255, 0, 255, 255))
+    drawing = ImageDraw.Draw(source)
+    drawing.rectangle((6, 6, 13, 13), fill=(220, 20, 20, 255))
+    for point in ((0, 0), (19, 0), (0, 19), (19, 19)):
+        source.putpixel(point, (230, 20, 230, 255))
+
+    result = remove_background_local(
+        _bytes(source),
+        method="color_key",
+        target_color=(255, 0, 255),
+        tolerance=10,
+    )
+
+    verification = result.metadata["verification"]
+    assert isinstance(verification, dict)
+    assert verification["disposition"] == "review_required"
+    assert verification["facts"]["opaque_corner_count"] == 4
+    assert any(
+        check["code"] == "image.background_removal_corners"
+        for check in verification["checks"]
+    )
+
+
+def test_corner_derived_color_key_adapts_tolerance_without_model_guessed_rgb() -> None:
+    source = Image.new("RGBA", (20, 20), (255, 0, 255, 255))
+    drawing = ImageDraw.Draw(source)
+    drawing.rectangle((6, 6, 13, 13), fill=(220, 20, 20, 255))
+    for point in ((0, 0), (19, 0), (0, 19), (19, 19)):
+        source.putpixel(point, (230, 20, 230, 255))
+
+    result = remove_background_local(_bytes(source), method="color_key")
+    image = _open(result.content).convert("RGBA")
+
+    assert result.metadata["tolerance_auto"] is True
+    assert result.metadata["tolerance"] > 24
+    assert all(
+        image.getpixel(point)[3] == 0
+        for point in ((0, 0), (19, 0), (0, 19), (19, 19))
+    )
+    assert image.getpixel((10, 10))[3] == 255
+    assert result.metadata["verification"]["disposition"] == "verified"
+
+
+def test_background_removal_reports_advisory_warning_when_no_alpha_is_created() -> None:
+    source = Image.new("RGBA", (20, 20), (200, 10, 200, 255))
+
+    result = remove_background_local(
+        _bytes(source),
+        method="color_key",
+        target_color=(1, 2, 3),
+        tolerance=1,
+    )
+
+    verification = result.metadata["verification"]
+    assert isinstance(verification, dict)
+    assert verification["disposition"] == "review_required"
+    checks = verification["checks"]
+    assert isinstance(checks, list)
+    assert any(check["code"] == "image.background_removal_alpha" for check in checks)
+
+
+def test_background_removal_reports_advisory_warning_when_foreground_is_lost() -> None:
+    source = Image.new("RGBA", (20, 20), (0, 255, 0, 255))
+    source.putpixel((10, 10), (220, 20, 20, 255))
+
+    result = remove_background_local(
+        _bytes(source),
+        method="color_key",
+        target_color=(0, 255, 0),
+        tolerance=1,
+    )
+
+    verification = result.metadata["verification"]
+    assert isinstance(verification, dict)
+    assert verification["disposition"] == "review_required"
+    checks = verification["checks"]
+    assert isinstance(checks, list)
+    assert any(check["code"] == "image.background_removal_foreground" for check in checks)
 
 
 def test_channel_matting_keeps_only_requested_channel_range() -> None:

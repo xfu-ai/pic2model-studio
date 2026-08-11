@@ -84,6 +84,31 @@ def test_b01_11_tool_request_id_replays_or_conflicts(tmp_path: Path):
     assert conflict.value.code == ErrorCode.IDEMPOTENCY_CONFLICT
 
 
+def test_read_only_asset_list_is_fresh_for_a_new_request_id(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    project = ProjectService().create(root, "Fresh read")
+    registry = ToolRegistry()
+    register_b01_tools(registry)
+
+    first = registry.execute(
+        root, project.id, "asset.list", "1.0.0", {"project_id": project.id}, "list-1"
+    )
+    image = tmp_path / "new.png"
+    Image.new("RGB", (2, 2)).save(image)
+    asset = AssetService().import_file(root, project.id, image, "source_image", "import")
+    fresh = registry.execute(
+        root, project.id, "asset.list", "1.0.0", {"project_id": project.id}, "list-2"
+    )
+    replay = registry.execute(
+        root, project.id, "asset.list", "1.0.0", {"project_id": project.id}, "list-2"
+    )
+
+    assert first.reused is False
+    assert fresh.reused is False
+    assert str(asset["id"]) in fresh.output_asset_ids
+    assert replay == fresh
+
+
 def test_external_paid_idempotency_is_scoped_to_each_explicit_request(tmp_path: Path):
     root = tmp_path / "project"
     project = ProjectService().create(root, "Paid")

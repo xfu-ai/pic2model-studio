@@ -14,9 +14,12 @@ JobHandler = Callable[..., object]
 
 
 class ProductionJobWorker:
-    def __init__(self, jobs: Any, handlers: Mapping[str, JobHandler]) -> None:
+    def __init__(
+        self, jobs: Any, handlers: Mapping[str, JobHandler], completion_broker: Any | None = None
+    ) -> None:
         self._jobs = jobs
         self._handlers = dict(handlers)
+        self._completion_broker = completion_broker
 
     @property
     def job_types(self) -> frozenset[str]:
@@ -51,6 +54,7 @@ class ProductionJobWorker:
                     "recommended_action": "configure_provider",
                 },
             )
+            self._notify_if_terminal(database, job.id)
             return job.id
         try:
             handler(
@@ -126,4 +130,13 @@ class ProductionJobWorker:
                         ),
                     },
                 )
+        finally:
+            self._notify_if_terminal(database, job.id)
         return job.id
+
+    def _notify_if_terminal(self, database: Path, job_id: str) -> None:
+        if self._completion_broker is None:
+            return
+        current = self._jobs.get(database, job_id=job_id)
+        if current.status in {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED}:
+            self._completion_broker.notify_terminal(job_id)

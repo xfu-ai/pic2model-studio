@@ -8,6 +8,11 @@ from typing import Any, Literal, cast
 
 from ...domain.job_models import JobStage, JobStatus, ResumeClass
 from ...domain.multiview_rules import default_regions
+from ...domain.production_prompts import (
+    MULTIVIEW_BASE_PROMPT,
+    MULTIVIEW_SHEET_REQUIREMENTS,
+    regenerate_view_prompt,
+)
 from ...domain.provider_models import (
     AnalysisRequest,
     ErrorCategory,
@@ -16,15 +21,10 @@ from ...domain.provider_models import (
     ProviderResult,
     RecommendedAction,
 )
-from ...domain.production_prompts import (
-    MULTIVIEW_BASE_PROMPT,
-    MULTIVIEW_SHEET_REQUIREMENTS,
-    regenerate_view_prompt,
-)
 from ..analysis import AnalysisAssetService, ProviderAnalysisError
 from ..candidate_service import CandidateService, ProviderGenerationError
-from ..image_provider_routing import AUTO_IMAGE_PROFILE
 from ..image_processing import compress_for_provider
+from ..image_provider_routing import AUTO_IMAGE_PROFILE
 from .submission_policy import PAID_SUBMISSION_TOOLS
 
 _ANALYSIS_MODES = {
@@ -454,6 +454,9 @@ class ExternalImageJobHandler:
             "mode": "i2i",
             "model": "auto",
             "candidate_count": 1,
+            # A square provider default conflicts with the required one-row
+            # front/side/back composition and commonly produces a 2x3 sheet.
+            "aspect_ratio": "16:9",
             "prompt": "\n\n".join(prompt_parts),
             "source_bytes": content,
             "source_mime": mime,

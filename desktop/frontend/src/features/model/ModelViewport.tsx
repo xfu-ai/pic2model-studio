@@ -47,6 +47,11 @@ export function ModelViewport({ projectId, api, workflowContext, onWorkflowConte
   const explicitSelection = useRef(false);
   const hydrated = useRef(false);
   const loadVersion = useRef(0);
+  // A preview is a managed child asset of its GLB. Keep this small cache in the
+  // workspace so loading the same model (or receiving a duplicate `load` event)
+  // never creates another default snapshot.
+  const previewedModelIds = useRef(new Set<string>());
+  const previewCaptureInFlight = useRef(new Set<string>());
   useEffect(() => {
     if (!hydrated.current) return;
     const next = {
@@ -64,6 +69,11 @@ export function ModelViewport({ projectId, api, workflowContext, onWorkflowConte
     let active = true;
     let objectUrl: string | null = null;
     void api.assets(projectId).then(async (assets) => {
+      for (const asset of assets) {
+        if (asset.asset_type === "preview" && asset.parent_asset_id && asset.trashed_at == null) {
+          previewedModelIds.current.add(asset.parent_asset_id);
+        }
+      }
       const generated = generationResultAssetId
         ? assets.find(
             (asset) =>
@@ -193,16 +203,33 @@ export function ModelViewport({ projectId, api, workflowContext, onWorkflowConte
   useEffect(() => {
     const element = viewer.current;
     if (!element || !url) return;
-    const handleLoad = () => setPreviewState("ready");
+    const handleLoad = () => {
+      setPreviewState("ready");
+      if (!model || fallback || previewedModelIds.current.has(model.id) || previewCaptureInFlight.current.has(model.id)) return;
+      if (!element.toBlob) return;
+      previewCaptureInFlight.current.add(model.id);
+      void element.toBlob({ idealAspect: true }).then(async (blob) => {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = "";
+        bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+        await api.registerPreview(projectId, model.id, btoa(binary), requestId());
+        previewedModelIds.current.add(model.id);
+      }).catch(() => {
+        // Keep the manual capture action available when a GPU/WebView capture fails.
+        setMessage("静态预览未能自动保存；模型仍可使用，可在调整视角后点击“保存截图”重试。");
+      }).finally(() => {
+        previewCaptureInFlight.current.delete(model.id);
+      });
+    };
     const handleError = () => setPreviewState("error");
     element.addEventListener("load", handleLoad);
     element.addEventListener("error", handleError);
-    if (element.loaded) setPreviewState("ready");
+    if (element.loaded) handleLoad();
     return () => {
       element.removeEventListener("load", handleLoad);
       element.removeEventListener("error", handleError);
     };
-  }, [url]);
+  }, [api, fallback, model, projectId, url]);
 
   const screenshot = async () => {
     if (!model || !viewer.current?.toBlob) { setMessage("预览器尚未准备好截图。"); return; }
@@ -212,6 +239,7 @@ export function ModelViewport({ projectId, api, workflowContext, onWorkflowConte
       let binary = "";
       bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
       await api.registerPreview(projectId, model.id, btoa(binary), requestId());
+      previewedModelIds.current.add(model.id);
       setMessage("截图已作为受管预览资产保存。");
     } catch { setMessage("截图保存失败，请在模型完全加载后重试。"); }
   };

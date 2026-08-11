@@ -3,8 +3,12 @@ from __future__ import annotations
 import pytest
 
 from aipic_to_model.agent.core.models import UserMessage
+from aipic_to_model.agent.integrations.progressive_tools import PERMANENT_TOOL_NAMES
+from aipic_to_model.agent.integrations.runtime import AgentRuntime
 from aipic_to_model.agent.session.sqlite import LinearSessionRepository
+from aipic_to_model.application.host_capabilities import HostCapabilityStore
 from aipic_to_model.application.projects import ProjectService
+from aipic_to_model.composition import compose_local_app
 
 
 @pytest.mark.agent
@@ -64,4 +68,40 @@ def test_agent_migration_coexists_with_a_b01_project_database(tmp_path) -> None:
 
     with repository._connect() as connection:
         assert connection.execute("SELECT count(*) FROM schema_migrations").fetchone()[0] == 11
-        assert connection.execute("SELECT count(*) FROM agent_schema_migrations").fetchone()[0] == 3
+        assert connection.execute("SELECT count(*) FROM agent_schema_migrations").fetchone()[0] == 4
+
+
+@pytest.mark.agent
+def test_recovery_restores_append_order_and_pins_an_approval_wait_tool(tmp_path) -> None:
+    dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
+    root = tmp_path / "project"
+    project = dependencies.projects.create(root, "Progressive Tool recovery")
+    dependencies.roots[project.id] = root
+    first = AgentRuntime(dependencies.registry, dependencies.root_for)
+    conversation_id = str(first.create(project.id)["id"])
+    repository = LinearSessionRepository(root / "agent.sqlite3")
+    repository.update_config(
+        conversation_id,
+        active_tools_json='["read","write","edit","bash","toolbox.status",'
+        '"toolbox.load","project.get_state","image.understand_for_agent",'
+        '"image.remove_background_local","model3d.generate_from_image",'
+        '"image.split_grid"]',
+    )
+    repository.register_job_wait(
+        conversation_id,
+        project_id=project.id,
+        run_id=conversation_id,
+        tool_call_id="approval-call",
+        tool_name="model3d.generate_from_multiview",
+    )
+
+    recovered = AgentRuntime(dependencies.registry, dependencies.root_for)
+    recovered.status(project.id, conversation_id)
+    conversation = recovered._conversations[(project.id, conversation_id)]
+
+    assert conversation.harness.active_tool_names == (
+        *PERMANENT_TOOL_NAMES,
+        "image.split_grid",
+        "model3d.generate_from_multiview",
+    )
+    assert repository.open(conversation_id).active_tools == conversation.harness.active_tool_names

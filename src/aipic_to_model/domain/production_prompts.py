@@ -1,6 +1,6 @@
 """Independent production instructions shared by image-generation workflows."""
 
-MULTIVIEW_BASE_PROMPT = " ".join(
+MULTIVIEW_BASE_PROMPT = " ".join(  # noqa: FLY002 - sentence lists stay diffable
     (
         "Produce a clean, wide modelling reference sheet containing exactly three orthographic views of the source subject: front, left-side, and rear.",
         "Preserve one identical design across all views, including silhouette, proportions, part placement, materials, colors, texture landmarks, and wear.",
@@ -10,13 +10,14 @@ MULTIVIEW_BASE_PROMPT = " ".join(
     )
 )
 
-MULTIVIEW_SHEET_REQUIREMENTS = " ".join(
+MULTIVIEW_SHEET_REQUIREMENTS = " ".join(  # noqa: FLY002 - sentence lists stay diffable
     (
-        "Return one wide horizontal image laid out as three equal conceptual columns, ordered front, left side, then rear from left to right.",
-        "Place exactly one complete view in each column and keep each subject at roughly 75 to 85 percent of the canvas height, with visible background above and below.",
-        "Leave a clearly empty vertical gutter of neutral background between adjacent silhouette bounding boxes, at least 5 percent of the full canvas width; the views must not touch, overlap, or visually merge.",
+        "Return exactly one 16:9 wide horizontal image containing a single 1-by-3 row; never use a second row, a 2-by-3 grid, stacked panels, or duplicated views.",
+        "Show exactly three subject renderings in total, ordered front, left side, then rear from left to right, with one rendering centered in each equal conceptual third of the canvas.",
+        "Scale all three renderings equally so every complete silhouette fits inside its own third. Keep each subject at roughly 55 to 75 percent of the canvas height, and shrink all three further when wide wings, limbs, hair, clothing, weapons, or accessories require more horizontal clearance.",
+        "Reserve clearly empty neutral-background gutters between adjacent silhouette bounding boxes, each at least 7 percent of the full canvas width, plus visible empty outer margins. No pixel belonging to one view may enter another view's third; the views must not touch, overlap, or visually merge.",
         "Hair, limbs, loose parts, weapons, accessories, floor shadows, and effects must remain inside their own column and must not enter either gutter.",
-        "Each view must be independently crop-ready. Do not return separate files or add text, captions, frames, borders, panel lines, or extra views.",
+        "Each view must be independently crop-ready. Do not return separate files or add text, captions, frames, borders, panel lines, alternate poses, detail insets, or extra views.",
     )
 )
 

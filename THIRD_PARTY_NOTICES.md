@@ -1,5 +1,18 @@
 # Third-party notices
 
+## Bundled local inference runtimes and models
+
+The Git LFS-managed resources under `resources/local-models/` include Ollama
+(MIT), Qwen3-VL (Apache-2.0), stable-diffusion.cpp (MIT), Z-Image-Turbo
+(Apache-2.0), CPython 3.11 (PSF License), PyTorch and its transitive runtime
+dependencies, and TripoSR (MIT). Their pinned versions, upstream revisions and
+runtime layout are recorded in `resources/local-models/README.md`,
+`workers/triposr/worker-manifest.json`, and `docs/local-open-models-ledger.md`.
+
+Bundled license and package metadata files remain beside their respective
+runtime distributions. These components are used only for local inference and
+are not contacted as external Providers.
+
 ## Google model-viewer
 
 The desktop UI and offline browser preview bundle `@google/model-viewer` 4.3.1

@@ -274,7 +274,7 @@
     {
       "name": "model3d.render_preview",
       "version": "1.0.0",
-      "execution": "job",
+      "execution": "sync",
       "risk_level": "local_reversible"
     },
     {

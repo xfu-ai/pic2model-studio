@@ -105,7 +105,7 @@ class TripoParameters(BaseModel):
     texture: bool = True
     pbr: bool = True
     quad: bool = False
-    face_limit: int = Field(default=100_000, ge=0)
+    face_limit: int = Field(default=100_000, ge=1)
     auto_size: bool = False
     orientation: Literal["default", "align_image"] = "default"
     smart_low_poly: bool = False

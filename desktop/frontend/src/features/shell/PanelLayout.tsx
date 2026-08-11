@@ -253,6 +253,7 @@ export function PanelLayout({ state, projectId, projectName, readOnly, project, 
       quality_confirmed: false,
       set_id: null,
       job_id: null,
+      pending_action_id: null,
     };
     setRoute("workspace");
     setActiveWorkflowMode("multiview");
@@ -271,7 +272,14 @@ export function PanelLayout({ state, projectId, projectName, readOnly, project, 
       workflow_contexts: { ...workspaceContextsRef.current, multiview },
     });
     if (!resultAssetId || !action.jobType) {
-      persist({ ...current, job_id: action.jobId ?? current.job_id });
+      persist({
+        ...current,
+        selected: action.assetId
+          ? { source: action.assetId, front: action.assetId, side: action.assetId, back: action.assetId }
+          : current.selected,
+        job_id: action.jobId ?? current.job_id,
+        pending_action_id: action.actionId ?? current.pending_action_id,
+      });
       return;
     }
     if (action.jobType === "multiview.generate") {
@@ -288,6 +296,7 @@ export function PanelLayout({ state, projectId, projectName, readOnly, project, 
         quality_confirmed: false,
         set_id: null,
         job_id: action.jobId ?? current.job_id,
+        pending_action_id: current.pending_action_id,
       });
       return;
     }
@@ -344,33 +353,45 @@ export function PanelLayout({ state, projectId, projectName, readOnly, project, 
   };
   const openAgentWorkspace = (action: AgentWorkspaceAction) => {
     if (
-      action.mode === "target_extract"
-      && action.jobType?.startsWith("edit_image.")
+      (action.jobType?.startsWith("edit_image.")
+        || ["image.normalize", "image.trim_transparent", "image.remove_background_local"].includes(action.jobType ?? ""))
       && action.assetId
       && action.resultAssetIds?.length
     ) {
       const current = workspaceContextsRef.current.target_extract;
       const sourceIndex = current.result_asset_ids.indexOf(action.assetId);
-      if (sourceIndex < 0) return;
-      const replacement = action.resultAssetIds[0];
-      const resultAssetIds = [...current.result_asset_ids];
-      resultAssetIds.splice(sourceIndex, 1, replacement);
-      const target_extract = {
-        ...current,
-        stage: "result" as const,
-        result_asset_ids: [...new Set(resultAssetIds)],
-        active_result_asset_id: current.active_result_asset_id === action.assetId
-          || !current.active_result_asset_id
-          ? replacement
-          : current.active_result_asset_id,
-      };
+      if (sourceIndex >= 0) {
+        const replacement = action.resultAssetIds[0];
+        const resultAssetIds = [...current.result_asset_ids];
+        resultAssetIds.splice(sourceIndex, 1, replacement);
+        const target_extract = {
+          ...current,
+          stage: "result" as const,
+          result_asset_ids: [...new Set(resultAssetIds)],
+          active_result_asset_id: current.active_result_asset_id === action.assetId
+            || !current.active_result_asset_id
+            ? replacement
+            : current.active_result_asset_id,
+        };
+        setRoute("workspace");
+        setActiveWorkflowMode("target_extract");
+        onPatch({
+          workspace_mode: "target_extract",
+          focus_target: "workspace-title",
+          workflow_contexts: { ...workspaceContextsRef.current, target_extract },
+        });
+        return;
+      }
+    }
+    if (action.mode === "image" && action.resultAssetIds?.[0] && projectId && api) {
+      const resultAssetId = action.resultAssetIds[0];
       setRoute("workspace");
-      setActiveWorkflowMode("target_extract");
-      onPatch({
-        workspace_mode: "target_extract",
-        focus_target: "workspace-title",
-        workflow_contexts: { ...workspaceContextsRef.current, target_extract },
-      });
+      setActiveWorkflowMode("image");
+      void api
+        .setCurrentAsset(projectId, resultAssetId, crypto.randomUUID())
+        .then(refreshCurrentAsset)
+        .catch(() => undefined);
+      onPatch({ workspace_mode: "image", focus_target: "workspace-title" });
       return;
     }
     setRoute("workspace");
@@ -597,7 +618,7 @@ export function PanelLayout({ state, projectId, projectName, readOnly, project, 
     });
   };
  const workspaceContent = <WorkspaceRouter mode={activeWorkflowMode} projectId={projectId} api={api} onModeChange={(workspace_mode) => { if (workspace_mode === "task_waiting") { setRoute("tasks"); return; } setActiveWorkflowMode(workspace_mode); onPatch({ workspace_mode, focus_target: "workspace-title" }); }} onCurrentAssetChange={refreshCurrentAsset} onContinueToMultiview={continueToMultiview} onOpenTasks={() => setRoute("tasks")} onOpenAssets={(assetId) => { setFocusedAssetId(assetId); setRoute("assets"); }} onImageImported={() => handleImported("image")} onGlbImported={() => handleImported("model3d")} onRecover={() => { setActiveWorkflowMode("empty"); onPatch({ workspace_mode: "empty", focus_target: "workspace-title" }); }} referenceContext={state.reference_context} onReferenceContextChange={patchReferenceContext} workflowContexts={state.workflow_contexts} onWorkflowContextChange={patchWorkflowContexts} imageGenerationJobId={state.image_generation_job_id} onImageJobQueued={(jobId) => onPatch({ image_generation_job_id: jobId })} candidateResult={candidateResult} />;
-  const content = route === "workspace" ? <div className="workspace-flow"><WorkflowSwitcher mode={activeWorkflowMode} onSelect={(workspace_mode) => void openWorkflow(workspace_mode)} />{workspaceContent}</div> : route === "assets" && projectId && api ? <AssetBrowser projectId={projectId} api={api} readOnly={readOnly} focusAssetId={focusedAssetId} onCurrent={useAssetImage} onOpenModel={openAssetModel} /> : route === "tasks" && projectId && api ? <JobsPanel projectId={projectId} api={api} showHistory onOpenResult={openJobResult} dismissedJobIds={state.dismissed_job_ids} onDismiss={(ids) => onPatch({ dismissed_job_ids: [...new Set([...state.dismissed_job_ids, ...ids])].slice(-200) })} /> : route === "exports" && project && api && onProject ? <ProjectPackageActions project={project} api={api} onProject={onProject} /> : <section className="route-placeholder"><h1>{placeholder}</h1><p>打开项目后即可查看受管任务。</p></section>;
+ const content = route === "workspace" ? <div className="workspace-flow"><WorkflowSwitcher mode={activeWorkflowMode} onSelect={(workspace_mode) => void openWorkflow(workspace_mode)} />{workspaceContent}</div> : route === "assets" && projectId && api ? <AssetBrowser projectId={projectId} api={api} readOnly={readOnly} focusAssetId={focusedAssetId} onCurrent={useAssetImage} onAssetRemoved={refreshCurrentAsset} onOpenModel={openAssetModel} /> : route === "tasks" && projectId && api ? <JobsPanel projectId={projectId} api={api} showHistory onOpenResult={openJobResult} dismissedJobIds={state.dismissed_job_ids} onDismiss={(ids) => onPatch({ dismissed_job_ids: [...new Set([...state.dismissed_job_ids, ...ids])].slice(-200) })} /> : route === "exports" && project && api && onProject ? <ProjectPackageActions project={project} api={api} onProject={onProject} /> : <section className="route-placeholder"><h1>{placeholder}</h1><p>打开项目后即可查看受管任务。</p></section>;
   return <div className="workbench">
     <TopBar projectName={projectName} currentAssetName={currentAssetName} readOnly={readOnly} diagnosticsDisabled={!projectId || !api} onTasks={() => setRoute("tasks")} onExports={() => setRoute("exports")} onDiagnostics={() => setDiagnosticsOpen(true)} onSettings={() => setSettingsOpen(true)} />
     <div className="workbench-body"><Navigation route={route} onChange={setRoute} /><main className="workspace-region">{content}</main>

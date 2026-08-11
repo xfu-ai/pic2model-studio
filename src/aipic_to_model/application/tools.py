@@ -201,7 +201,15 @@ class ToolRegistry:
             profile: str | None,
         ) -> str:
             key_arguments: Mapping[str, object] = tool_arguments
-            if effective_risk is RiskLevel.EXTERNAL_PAID:
+            if effective_risk is RiskLevel.READ_ONLY:
+                # A read reflects mutable project state.  The tool_requests row still
+                # replays a transport retry with the same request_id, but a later
+                # request must execute again rather than return an old inventory.
+                key_arguments = {
+                    **tool_arguments,
+                    "__request_id": request_id,
+                }
+            elif effective_risk is RiskLevel.EXTERNAL_PAID:
                 # A request ID identifies one explicit, approved submission
                 # intent. Replaying that same request remains idempotent, but
                 # a later user click is a new intent and must create a new Job.

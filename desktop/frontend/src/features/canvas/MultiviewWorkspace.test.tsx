@@ -490,6 +490,7 @@ describe("MultiviewWorkspace", () => {
       assets: vi.fn().mockResolvedValue([sheet]),
       assetContent: vi.fn().mockResolvedValue(new Blob(["image"])),
       createMultiviewSet: vi.fn().mockResolvedValue({ id: "set-1" }),
+      completeAgentMultiviewAction: vi.fn().mockResolvedValue({ status: "succeeded" }),
       decideApproval: vi.fn().mockResolvedValue({
         status: "queued",
         job: { job_id: "job-3d" },
@@ -506,6 +507,15 @@ describe("MultiviewWorkspace", () => {
         projectId="project-1"
         api={api as never}
         onQueued={vi.fn()}
+        workflowContext={{
+          selected: { source: "sheet", front: "sheet", side: "sheet", back: "sheet" },
+          regions: {},
+          checks: {},
+          quality_confirmed: false,
+          set_id: null,
+          job_id: null,
+          pending_action_id: "agent-confirm-regions",
+        }}
         modelWorkflowContext={{ asset_id: null, target_triangles: 50000, generation_job_id: null }}
         onModelWorkflowContextChange={onModelWorkflowContextChange}
       />,
@@ -540,6 +550,13 @@ describe("MultiviewWorkspace", () => {
       target_triangles: 5000,
       generation_job_id: "job-3d",
     }));
+    expect(api.completeAgentMultiviewAction).toHaveBeenCalledWith(
+      "project-1",
+      "agent-confirm-regions",
+      "set-1",
+      { front: "front", side: "side", back: "back" },
+      expect.any(String),
+    );
     const toolCalls = api.invokeTool.mock.calls.map((call) => call[1]);
     expect(toolCalls.indexOf("multiview.set_regions")).toBeLessThan(
       toolCalls.indexOf("multiview.crop_views"),

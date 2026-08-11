@@ -21,10 +21,22 @@ describe("AgentPanel", () => {
       "attached image is included directly in the current multimodal message",
     );
     expect(api.createAgentConversation.mock.calls[0][1]).toContain(
-      "message provides only a managed image reference",
+      "only a managed image reference is available",
     );
     expect(api.createAgentConversation.mock.calls[0][1]).toContain(
-      "Chinese input receives Chinese output, English input receives English output",
+      "Chinese is the default when ambiguous",
+    );
+    expect(api.createAgentConversation.mock.calls[0][1]).toContain(
+      "call toolbox.status",
+    );
+    expect(api.createAgentConversation.mock.calls[0][1]).toContain(
+      "Use image.normalize",
+    );
+    expect(api.createAgentConversation.mock.calls[0][1]).toContain(
+      "Use image.upscale_local",
+    );
+    expect(api.createAgentConversation.mock.calls[0][1]).toContain(
+      "![short descriptive label](asset:<exact_output_asset_ref>)",
     );
   });
 
@@ -48,6 +60,95 @@ describe("AgentPanel", () => {
     expect(api.agentMessages).toHaveBeenCalledWith("project-1", "restored", 20);
     expect(api.createAgentConversation).not.toHaveBeenCalled();
     expect(onWorkspaceAction).not.toHaveBeenCalled();
+  });
+
+  it("shows the durable execution plan and updates it from plan events", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [{ id: "restored", state: "running", message_count: 1 }] }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn().mockResolvedValue({
+        items: [{ id: "user", role: "user", content: "Remove the background" }],
+        execution_plan: {
+          version: 1,
+          goal: "Remove the background",
+          constraints: ["Preserve the subject"],
+          steps: [{ id: "remove", label: "Remove background", state: "pending" }],
+          current_step_id: "remove",
+          state: "executing",
+          next_action: "execute",
+        },
+      }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "execution.plan.updated",
+            payload: {
+              conversation_id: "restored",
+              plan: {
+                version: 1,
+                goal: "Remove the background",
+                constraints: ["Preserve the subject"],
+                steps: [{ id: "remove", label: "Remove background", state: "review_required", warning: "No alpha pixels" }],
+                current_step_id: null,
+                state: "completed_with_warnings",
+                next_action: "execute",
+              },
+            },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 1,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 1 }),
+      sendAgentMessage: vi.fn(),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    expect(await screen.findByLabelText("Execution plan")).toHaveTextContent("Remove the background");
+    expect(screen.getByLabelText("Execution plan").closest(".agent-live-panel")).toHaveClass("has-plan");
+    await waitFor(() => expect(screen.getByLabelText("Execution plan")).toHaveTextContent("Completed with warnings"));
+    expect(screen.getByLabelText("Execution plan").querySelector(".spin")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "View details" }));
+    expect(await screen.findByText(/No alpha pixels/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Hide details" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("shows an interrupted recovery as waiting for user input instead of completed", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({
+        items: [{ id: "restored", state: "idle", message_count: 2 }],
+      }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn().mockResolvedValue({
+        items: [
+          { id: "user", role: "user", content: "Create a character model" },
+          { id: "assistant", role: "assistant", content: "Please confirm a new submission." },
+        ],
+        execution_plan: {
+          version: 1,
+          goal: "Create a character model",
+          constraints: [],
+          steps: [{
+            id: "generate",
+            label: "Generate 3D model",
+            state: "failed",
+            warning: "Submission state is unknown.",
+          }],
+          current_step_id: null,
+          state: "waiting_user",
+          next_action: "ask_user",
+        },
+      }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    expect(await screen.findByText("Please confirm a new submission.")).toBeVisible();
+    expect(screen.getByLabelText("Execution plan")).toHaveTextContent("Needs your input");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Agent is waiting for your decision before it can continue.",
+    );
   });
 
   it("loads earlier conversation messages in 20-message pages when scrolled to the top", async () => {
@@ -299,11 +400,6 @@ describe("AgentPanel", () => {
               job: { job_id: "job-restored", status: "queued" },
             },
           },
-          {
-            id: "internal",
-            role: "user",
-            content: "The user approved the external operation; job_id=job-restored. Follow the task and continue with preview, conversion, or export once it completes.",
-          },
         ],
       }),
       job: vi.fn().mockResolvedValue({
@@ -356,16 +452,8 @@ describe("AgentPanel", () => {
 
     render(<AgentPanel projectId="project-1" api={api as never} />);
 
-    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
-      "project-1",
-      "restored",
-      expect.stringContaining("ended with status=interrupted"),
-      "agent-job-terminal-job-interrupted",
-      true,
-    ));
-    expect(api.sendAgentMessage.mock.calls[0][2]).toContain(
-      "The Provider rate limit was reached.",
-    );
+    await waitFor(() => expect(api.job).toHaveBeenCalledWith("project-1", "job-interrupted"));
+    expect(api.sendAgentMessage).not.toHaveBeenCalled();
   });
 
   it("keeps waiting through a resumable interrupted Job without an error", async () => {
@@ -504,16 +592,8 @@ describe("AgentPanel", () => {
       onWorkspaceAction={onWorkspaceAction}
     />);
 
-    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
-      "project-1",
-      "restored",
-      expect.stringContaining("result_selection_ids=selection-front,selection-side,selection-back"),
-      "agent-job-terminal-job-multiview",
-      true,
-    ));
-    expect(api.sendAgentMessage.mock.calls[0][2]).toContain(
-      "These are selection references, not asset references",
-    );
+    await waitFor(() => expect(api.job).toHaveBeenCalledWith("project-1", "job-multiview"));
+    expect(api.sendAgentMessage).not.toHaveBeenCalled();
     expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "multiview" }));
   });
 
@@ -554,13 +634,8 @@ describe("AgentPanel", () => {
       onWorkspaceAction={onWorkspaceAction}
     />);
 
-    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
-      "project-1",
-      "restored",
-      expect.stringContaining("Continue the original user goal autonomously"),
-      "agent-job-terminal-job-analysis",
-      true,
-    ));
+    await waitFor(() => expect(api.job).toHaveBeenCalledWith("project-1", "job-analysis"));
+    expect(api.sendAgentMessage).not.toHaveBeenCalled();
     expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({
       mode: "compare",
       jobType: "image.analyze_style",
@@ -608,13 +683,8 @@ describe("AgentPanel", () => {
       />,
     );
 
-    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
-      "project-1",
-      "restored",
-      expect.stringContaining("Continue the original user goal autonomously"),
-      "agent-job-terminal-job-image",
-      true,
-    ));
+    await waitFor(() => expect(api.job).toHaveBeenCalledWith("project-1", "job-image"));
+    expect(api.sendAgentMessage).not.toHaveBeenCalled();
     expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({
       mode: "prompt_image",
       jobId: "job-image",
@@ -661,13 +731,8 @@ describe("AgentPanel", () => {
       />,
     );
 
-    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith(
-      "project-1",
-      "restored",
-      expect.stringContaining("Continue the original user goal autonomously"),
-      "agent-job-terminal-job-transparent",
-      true,
-    ));
+    await waitFor(() => expect(api.job).toHaveBeenCalledWith("project-1", "job-transparent"));
+    expect(api.sendAgentMessage).not.toHaveBeenCalled();
     expect(onWorkspaceAction).toHaveBeenCalledWith(expect.objectContaining({ mode: "candidate" }));
   });
 
@@ -722,7 +787,7 @@ describe("AgentPanel", () => {
         }],
       }),
       decideApproval: vi.fn().mockResolvedValue({ status: "queued", summary: "Job queued.", job: { job_id: "job-1" } }),
-      job: vi.fn().mockResolvedValue({ id: "job-1", status: "succeeded", output_asset_ids: ["glb-1"] }),
+      job: vi.fn().mockResolvedValue({ id: "job-1", status: "running", output_asset_ids: [] }),
     };
     const onJobQueued = vi.fn();
     render(<AgentPanel projectId="project-1" api={api as never} onJobQueued={onJobQueued} />);
@@ -732,12 +797,170 @@ describe("AgentPanel", () => {
     expect(await screen.findByRole("button", { name: "Approve and run" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Approve and run" }));
     await waitFor(() => expect(api.decideApproval).toHaveBeenCalledWith("project-1", "approval-1", true, expect.any(String)));
-    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledTimes(3));
-    expect(api.sendAgentMessage.mock.calls[1][2]).toContain("job_id=job-1");
-    expect(api.sendAgentMessage.mock.calls[2][2]).toContain("result_asset_ids=glb-1");
-    expect(api.sendAgentMessage.mock.calls[2][3]).toBe("agent-job-terminal-job-1");
+    await waitFor(() => expect(api.job).toHaveBeenCalledWith("project-1", "job-1"));
+    expect(api.sendAgentMessage).toHaveBeenCalledTimes(1);
     expect(onJobQueued).toHaveBeenCalledWith("job-1", null, undefined);
     expect(screen.queryByText("The approval could not be submitted. Try again.")).toBeNull();
+    expect(screen.getByRole("status")).not.toHaveTextContent("Waiting for your approval");
+    expect(screen.getByRole("status")).toHaveTextContent("Background task is running");
+    expect(screen.getByRole("status")).not.toHaveTextContent("Agent is ready");
+  });
+
+  it("clears a restored approval projection when the durable pending action disappears", async () => {
+    const pendingPage = {
+      items: [{
+        id: "tool-call", role: "assistant", content: [{
+          type: "tool_call", id: "image-call", name: "image.transform_from_reference", arguments: {},
+        }],
+      }],
+      pending_ui_actions: [{
+        tool_call_id: "image-call",
+        tool_name: "image.transform_from_reference",
+        result: {
+          content: [{ type: "text", text: "Approval is required." }],
+          details: {
+            status: "awaiting_ui_action",
+            ui_action: { action_id: "approval-image", type: "approval_required" },
+          },
+          is_error: false,
+        },
+      }],
+    };
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [{
+        id: "suspended", state: "idle", message_count: 1,
+      }] }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn()
+        .mockResolvedValueOnce(pendingPage)
+        .mockResolvedValue({ items: [], pending_ui_actions: [] }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            sequence_no: 1,
+            event_type: "agent.idle",
+            payload: { conversation_id: "suspended" },
+            created_at: new Date().toISOString(),
+          }],
+          next_cursor: 1,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 1 }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    await waitFor(() => expect(api.agentMessages).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: "Approve and run" })).toBeNull();
+    expect(screen.queryByLabelText("image.transform_from_reference tool Completed")).toBeNull();
+    expect(screen.getByRole("status")).not.toHaveTextContent("Waiting for your approval");
+  });
+
+  it("restores a suspended paid Tool approval after the Agent idle event", async () => {
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [{
+        id: "suspended", state: "idle", message_count: 2, preview: "Create a model",
+      }] }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn().mockResolvedValue({
+        items: [{
+          id: "tool-call", role: "assistant", content: [{
+            type: "tool_call", id: "model-call", name: "generate_model3d", arguments: {},
+          }],
+        }],
+        pending_ui_actions: [{
+          tool_call_id: "model-call",
+          tool_name: "generate_model3d",
+          result: {
+            content: [{ type: "text", text: "Approval is required." }],
+            details: {
+              status: "awaiting_ui_action",
+              ui_action: { action_id: "approval-restore", type: "approval_required" },
+            },
+            is_error: false,
+          },
+        }],
+        event_cursor: 3,
+      }),
+      agentEvents: vi.fn()
+        .mockResolvedValueOnce({
+          items: [
+            { sequence_no: 4, event_type: "agent.idle", payload: { conversation_id: "suspended" }, created_at: new Date().toISOString() },
+            { sequence_no: 5, event_type: "conversation.suspended", payload: { conversation_id: "suspended" }, created_at: new Date().toISOString() },
+          ],
+          next_cursor: 5,
+        })
+        .mockResolvedValue({ items: [], next_cursor: 5 }),
+      decideApproval: vi.fn().mockResolvedValue({ status: "queued", summary: "Job queued.", job: { job_id: "job-restore" } }),
+      job: vi.fn().mockResolvedValue({ id: "job-restore", status: "running", output_asset_ids: [] }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    expect(await screen.findByRole("button", { name: "Approve and run" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for your approval");
+    expect(screen.getByLabelText("generate_model3d tool Completed")).toBeVisible();
+  });
+
+  it("declines a suspended external action before sending a replacement instruction", async () => {
+    const busyError = Object.assign(new Error("busy"), { code: "AGENT_BUSY" });
+    const api = {
+      agentConversations: vi.fn().mockResolvedValue({ items: [{
+        id: "suspended", state: "idle", message_count: 1, preview: "Regenerate the image",
+      }] }),
+      createAgentConversation: vi.fn(),
+      agentMessages: vi.fn()
+        .mockResolvedValueOnce({
+          items: [{
+            id: "tool-call", role: "assistant", content: [{
+              type: "tool_call", id: "image-call", name: "image.transform_from_reference", arguments: {},
+            }],
+          }],
+          pending_ui_actions: [{
+            tool_call_id: "image-call",
+            tool_name: "image.transform_from_reference",
+            result: {
+              content: [{ type: "text", text: "Approval is required." }],
+              details: {
+                status: "awaiting_ui_action",
+                ui_action: { action_id: "approval-image", type: "approval_required" },
+              },
+              is_error: false,
+            },
+          }],
+        })
+        .mockResolvedValue({
+          items: [
+            { id: "declined", role: "tool_result", tool_call_id: "image-call", tool_name: "image.transform_from_reference", content: "The external operation was declined.", details: { status: "declined" } },
+            { id: "replacement", role: "user", content: "不要再重新生成了" },
+            { id: "reply", role: "assistant", content: "明白，将保留当前图片。" },
+          ],
+          pending_ui_actions: [],
+        }),
+      decideApproval: vi.fn().mockResolvedValue({ status: "failed", summary: "Declined." }),
+      sendAgentMessage: vi.fn()
+        .mockRejectedValueOnce(busyError)
+        .mockResolvedValue({ state: "idle" }),
+    };
+
+    render(<AgentPanel projectId="project-1" api={api as never} />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Waiting for your approval");
+    fireEvent.change(screen.getByRole("textbox", { name: "Message the Agent" }), {
+      target: { value: "不要再重新生成了" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send to Agent" }));
+
+    await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledTimes(2));
+    expect(api.decideApproval).toHaveBeenCalledWith(
+      "project-1", "approval-image", false, expect.any(String),
+    );
+    expect(api.decideApproval.mock.invocationCallOrder[0]).toBeLessThan(
+      api.sendAgentMessage.mock.invocationCallOrder[0],
+    );
+    expect(api.sendAgentMessage.mock.calls[0][3]).toBe(api.sendAgentMessage.mock.calls[1][3]);
+    expect(await screen.findByText("明白，将保留当前图片。")).toBeVisible();
+    expect(screen.queryByText(/could not complete this request/)).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Message the Agent" })).toHaveValue("");
   });
 
   it("pairs tool results with their assistant tool call and keeps raw output collapsed", async () => {
@@ -833,6 +1056,69 @@ describe("AgentPanel", () => {
     expect(screen.queryByText("Found the existing cat image.")).toBeNull();
   });
 
+  it("converts managed Markdown image references into inline Blob thumbnails", async () => {
+    const objectUrls = ["blob:mother-preview", "blob:component-preview"];
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => objectUrls.shift() ?? "blob:extra-preview"),
+      revokeObjectURL: vi.fn(),
+    });
+    const api = {
+      createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
+      sendAgentMessage: vi.fn().mockResolvedValue({ state: "idle" }),
+      agentMessages: vi.fn().mockResolvedValue({ items: [
+        {
+          id: "mother-result",
+          role: "tool_result",
+          tool_call_id: "mother-call",
+          tool_name: "generate_images",
+          content: [{ type: "text", text: "Mother image ready." }],
+          details: { status: "succeeded", output_asset_ids: ["mother-asset"] },
+        },
+        {
+          id: "split-result",
+          role: "tool_result",
+          tool_call_id: "split-call",
+          tool_name: "image.split_alpha_components",
+          content: [{ type: "text", text: "Component ready." }],
+          details: { status: "succeeded", output_asset_ids: ["component-asset"] },
+        },
+        {
+          id: "reply",
+          role: "assistant",
+          content: [{
+            type: "text",
+            text: "母图：![Q版母图](asset:mother-asset)\n\n组件：![头盔](components/headgear.png)",
+          }],
+        },
+      ] }),
+      assets: vi.fn().mockResolvedValue([
+        { id: "mother-asset", asset_type: "generated_image", name: "mother.png", is_current: false, metadata: {} },
+        { id: "component-asset", asset_type: "crop", name: "headgear.png", is_current: false, metadata: {} },
+      ]),
+      assetThumbnail: vi.fn()
+        .mockResolvedValueOnce(new Blob(["mother"], { type: "image/png" }))
+        .mockResolvedValueOnce(new Blob(["component"], { type: "image/png" })),
+      assetContent: vi.fn(),
+    };
+
+    const { container } = render(<AgentPanel projectId="project-1" api={api as never} />);
+    await waitFor(() => expect(api.createAgentConversation).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Message the Agent"), { target: { value: "Show the results inline" } });
+    fireEvent.click(screen.getByLabelText("Send to Agent"));
+
+    const mother = await screen.findByRole("img", { name: "Q版母图" });
+    const component = await screen.findByRole("img", { name: "头盔" });
+    const answer = mother.closest<HTMLElement>("article.agent-message.assistant");
+    expect(answer).not.toBeNull();
+    expect(within(answer!).getByRole("img", { name: "头盔" })).toBe(component);
+    expect(mother).toHaveAttribute("src", "blob:mother-preview");
+    expect(component).toHaveAttribute("src", "blob:component-preview");
+    expect(api.assetThumbnail).toHaveBeenCalledTimes(2);
+    expect(api.assetContent).not.toHaveBeenCalled();
+    expect(container.querySelector(".agent-chat-images")).toBeNull();
+    expect(container.querySelector('img[src^="asset:"]')).toBeNull();
+  });
+
   it("does not attach every image returned by asset.list", async () => {
     const api = {
       createAgentConversation: vi.fn().mockResolvedValue({ id: "conversation-1" }),
@@ -872,8 +1158,11 @@ describe("AgentPanel", () => {
       agentMessages: vi.fn().mockResolvedValue({ items: [
         {
           id: "job-complete",
-          role: "user",
-          content: [{ type: "text", text: "Task job_id=job-1 completed, result_asset_ids=cthulhu-cover. Reply to the user now with a concise completion summary; the generated image will be displayed with your final chat answer. Do not call more tools unless the user asks." }],
+          role: "tool_result",
+          tool_call_id: "job-call",
+          tool_name: "generate_images",
+          content: [{ type: "text", text: "The Job completed successfully." }],
+          details: { status: "succeeded", output_asset_ids: ["cthulhu-cover"] },
         },
         { id: "reply", role: "assistant", content: [{ type: "text", text: "The Cthulhu-style cover is ready." }] },
       ] }),

@@ -76,7 +76,7 @@
           },
           "face_limit": {
             "default": 100000,
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "generate_parts": {

@@ -183,6 +183,212 @@ def run_import_image(connection: CdpConnection, timeout: float) -> None:
         raise AssertionError("image import sent a local path instead of a capability")
 
 
+def run_asset_file_actions(connection: CdpConnection, timeout: float) -> dict[str, object]:
+    """Exercise reveal and capability-backed export from both image surfaces."""
+
+    if not connection.evaluate("!!document.querySelector('.image-workspace')"):
+        connection.evaluate(
+            "[...document.querySelectorAll('.primary-navigation button')].find((item) => item.textContent?.trim() === '工作区')?.click()"
+        )
+    wait_for(
+        connection,
+        "!!document.querySelector('.image-workspace .asset-file-actions')",
+        "the current-image file actions",
+        timeout,
+    )
+    current_name = connection.evaluate(
+        "document.querySelector('.current-asset-title h1')?.textContent?.trim()"
+    )
+    if not current_name:
+        raise AssertionError("the current image name is unavailable")
+
+    connection.evaluate(
+        "document.querySelector('.image-workspace .asset-file-actions button[aria-label=\"打开目录\"]')?.click()"
+    )
+    wait_for(
+        connection,
+        "document.querySelector('.image-workspace .asset-file-actions [role=status]')?.textContent?.includes('已打开资产所在目录')",
+        "the current-image directory feedback",
+        timeout,
+    )
+    connection.evaluate(
+        "document.querySelector('.image-workspace .asset-file-actions button[aria-label=\"导出资源\"]')?.click()"
+    )
+    wait_for(
+        connection,
+        "document.querySelector('.image-workspace .asset-file-actions [role=status]')?.textContent?.includes('已导出')",
+        "the current-image export feedback",
+        timeout,
+    )
+
+    connection.evaluate(
+        "[...document.querySelectorAll('.primary-navigation button')].find((item) => item.textContent?.trim() === '资产')?.click()"
+    )
+    wait_for(
+        connection,
+        "!!document.querySelector('.asset-browser .asset-card .asset-file-actions')",
+        "the asset-library file actions",
+        timeout,
+    )
+    library_name = connection.evaluate(
+        "document.querySelector('.asset-browser .asset-card h2')?.textContent?.trim()"
+    )
+    if not library_name:
+        raise AssertionError("the asset-library card name is unavailable")
+
+    connection.evaluate(
+        "document.querySelector('.asset-browser .asset-card .asset-file-actions button[aria-label=\"打开目录\"]')?.click()"
+    )
+    wait_for(
+        connection,
+        "document.querySelector('.asset-browser .asset-card .asset-file-actions [role=status]')?.textContent?.includes('已打开资产所在目录')",
+        "the asset-library directory feedback",
+        timeout,
+    )
+    connection.evaluate(
+        "document.querySelector('.asset-browser .asset-card .asset-file-actions button[aria-label=\"导出资源\"]')?.click()"
+    )
+    wait_for(
+        connection,
+        "document.querySelector('.asset-browser .asset-card .asset-file-actions [role=status]')?.textContent?.includes('已导出')",
+        "the asset-library export feedback",
+        timeout,
+    )
+
+    # Return to the workbench so the final evidence bundle also proves the
+    # compact toolbar layout, while the preceding bundle retains the asset card.
+    connection.evaluate(
+        "[...document.querySelectorAll('.primary-navigation button')].find((item) => item.textContent?.trim() === '工作区')?.click()"
+    )
+    wait_for(
+        connection,
+        "!!document.querySelector('.image-workspace .asset-file-actions')",
+        "the restored current-image file actions",
+        timeout,
+    )
+    connection.evaluate(
+        "document.querySelector('.image-workspace .asset-file-actions button[aria-label=\"导出资源\"]')?.click()"
+    )
+    wait_for(
+        connection,
+        "document.querySelector('.image-workspace .asset-file-actions [role=status]')?.textContent?.includes('已导出')",
+        "the restored current-image export feedback",
+        timeout,
+    )
+
+    connection.evaluate("true")
+    requests = [
+        *(connection.evaluate("globalThis.__aipicE2E?.network || []") or []),
+        *cdp_network_records(connection),
+    ]
+    reveals = [item for item in requests if "/reveal" in str(item.get("url", ""))]
+    exports = [item for item in requests if "/export" in str(item.get("url", ""))]
+    if len(reveals) < 2 or len(exports) < 2:
+        raise AssertionError(
+            "both asset surfaces must issue reveal and export requests"
+        )
+    failed = [
+        item
+        for item in [*reveals, *exports]
+        if int(item.get("status") or 0) >= 400
+    ]
+    if failed:
+        raise AssertionError(f"asset file action request failed: {redact(failed)}")
+
+    return {
+        "scenario": "asset_file_actions",
+        "status": "passed",
+        "assertions": {
+            "current_image": current_name,
+            "asset_library_card": library_name,
+            "current_image_reveal": True,
+            "current_image_export": True,
+            "asset_library_reveal": True,
+            "asset_library_export": True,
+            "final_surface": "current_image",
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
+        },
+    }
+
+
+def run_asset_remove(connection: CdpConnection, timeout: float) -> dict[str, object]:
+    """Confirm impact and move one managed file into the project trash."""
+
+    if not connection.evaluate("!!document.querySelector('.asset-browser')"):
+        connection.evaluate(
+            "[...document.querySelectorAll('.primary-navigation button')].find((item) => item.textContent?.trim() === '资产')?.click()"
+        )
+    wait_for(
+        connection,
+        "!!document.querySelector('.asset-browser .asset-card')",
+        "an asset card to remove",
+        timeout,
+    )
+    removed = connection.evaluate(
+        """(() => {
+          const card = document.querySelector('.asset-browser .asset-card');
+          const button = card?.querySelector('.asset-remove-button');
+          if (!card || !button) throw new Error('asset remove action is missing');
+          const result = {
+            id: card.dataset.assetId,
+            name: card.querySelector('h2')?.textContent?.trim(),
+            cardsBefore: document.querySelectorAll('.asset-browser .asset-card').length,
+          };
+          button.click();
+          return result;
+        })()"""
+    )
+    wait_for(
+        connection,
+        "document.querySelector('.asset-remove-action.confirming p')?.textContent?.includes('本地文件将移入项目回收站')",
+        "the asset impact confirmation",
+        timeout,
+    )
+    connection.evaluate(
+        "document.querySelector('.asset-remove-action.confirming button.danger')?.click()"
+    )
+    wait_for(
+        connection,
+        (
+            "!document.querySelector('.asset-card[data-asset-id="
+            + json.dumps(removed["id"])
+            + "]') && document.querySelector('.asset-notice.success')?.textContent?.includes('本地文件已移入项目回收站')"
+        ),
+        "the completed asset removal",
+        timeout,
+    )
+
+    connection.evaluate("true")
+    requests = [
+        *(connection.evaluate("globalThis.__aipicE2E?.network || []") or []),
+        *cdp_network_records(connection),
+    ]
+    impacts = [item for item in requests if "/impact" in str(item.get("url", ""))]
+    trash = [item for item in requests if "/trash" in str(item.get("url", ""))]
+    if not impacts or not trash:
+        raise AssertionError("asset removal did not issue impact and trash requests")
+    if any(int(item.get("status") or 0) >= 400 for item in [*impacts, *trash]):
+        raise AssertionError("asset impact or trash request failed")
+
+    return {
+        "scenario": "asset_remove",
+        "status": "passed",
+        "assertions": {
+            "asset_name": removed["name"],
+            "impact_confirmed": True,
+            "card_removed": True,
+            "cards_before": removed["cardsBefore"],
+            "cards_after": connection.evaluate(
+                "document.querySelectorAll('.asset-browser .asset-card').length"
+            ),
+            "local_file_moved_to_project_trash": True,
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
+        },
+    }
+
+
 def run_agent_image_attachment(
     connection: CdpConnection, timeout: float, image_paths: list[Path]
 ) -> dict[str, object]:
@@ -243,6 +449,22 @@ def run_agent_image_attachment(
             if (isEvents && globalThis.__aipicAgentAttachmentRequest) {
               const response = {
                 items: [{
+                  sequence_no: 998,
+                  event_type: 'execution.plan.updated',
+                  payload: {
+                    conversation_id: 'controlled-agent-conversation',
+                    plan: {
+                      version: 1,
+                      goal: 'Use both attached reference images',
+                      constraints: ['Preserve the supplied references'],
+                      steps: [{id: 'inspect', label: 'Inspect the attached references', state: 'review_required', warning: 'Controlled verification requires review'}],
+                      current_step_id: null,
+                      state: 'completed_with_warnings',
+                      next_action: 'execute',
+                    },
+                  },
+                  created_at: new Date().toISOString(),
+                }, {
                   sequence_no: 999,
                   event_type: 'conversation.completed',
                   payload: {conversation_id: 'controlled-agent-conversation'},
@@ -284,6 +506,15 @@ def run_agent_image_attachment(
                   mime_type: 'image/png',
                 })),
               }],
+              execution_plan: {
+                version: 1,
+                goal: 'Use both attached reference images',
+                constraints: ['Preserve the supplied references'],
+                steps: [{id: 'inspect', label: 'Inspect the attached references', state: 'review_required', warning: 'Controlled verification requires review'}],
+                current_step_id: null,
+                state: 'completed_with_warnings',
+                next_action: 'execute',
+              },
             };
             return new Response(JSON.stringify(response), {
               status: 200,
@@ -315,9 +546,25 @@ def run_agent_image_attachment(
         (
             f"globalThis.__aipicAgentAttachmentRequest?.asset_refs?.length === {len(image_paths)} && "
             f"document.querySelectorAll('.agent-user-attachments img[src^=\"blob:\"]').length === {len(image_paths)} && "
-            "document.querySelector('.agent-run-status')?.classList.contains('completed')"
+            "document.querySelector('[aria-label=\"Execution plan\"]')?.textContent?.includes('Completed with warnings') && "
+            "document.querySelector('.agent-run-status')?.classList.contains('completed') && "
+            "document.querySelector('.agent-run-status')?.textContent?.includes('completed this response with warnings') && "
+            "!document.querySelector('.agent-run-status')?.textContent?.includes('needs attention') && "
+            "!document.querySelector('.agent-run-status')?.textContent?.includes('Waiting for your approval')"
         ),
-        "the sent and restored Agent image attachments with a completed UI state",
+        "the sent and restored Agent image attachments with a completed-with-warnings UI state",
+        timeout,
+    )
+    connection.evaluate(
+        "document.querySelector('[aria-label=\"Execution plan\"] button[aria-expanded=\"false\"]')?.click(); true"
+    )
+    wait_for(
+        connection,
+        (
+            "document.querySelector('[aria-label=\"Execution plan\"]')?.textContent"
+            "?.includes('Controlled verification requires review')"
+        ),
+        "the expanded Agent plan review details",
         timeout,
     )
     request = connection.evaluate("globalThis.__aipicAgentAttachmentRequest")
@@ -364,8 +611,121 @@ def run_agent_image_attachment(
             "native_path_exposed": False,
             "internal_instruction_exposed": False,
             "restored_attachment_visible": True,
-            "completed_state_visible": True,
+            "completed_with_warnings_state_visible": True,
+            "plan_and_review_visible": True,
+            "plan_details_expanded": True,
             "provider_request_intercepted": True,
+        },
+    }
+
+
+def run_agent_approval_status(connection: CdpConnection, timeout: float) -> dict[str, object]:
+    """Prove that a successful approval immediately clears the stale waiting banner."""
+
+    wait_for(connection, "!!document.querySelector('.agent-live-panel')", "the Agent panel", timeout)
+    connection.evaluate(
+        r"""(() => {
+          const originalFetch = globalThis.fetch.bind(globalThis);
+          globalThis.__aipicAgentApprovalOriginalFetch = originalFetch;
+          globalThis.fetch = async (input, init = {}) => {
+            const url = typeof input === 'string' ? input : input.url;
+            const method = String(init.method || 'GET').toUpperCase();
+            const json = (value) => new Response(JSON.stringify(value), {
+              status: 200, headers: {'Content-Type': 'application/json'},
+            });
+            if (/\/v1\/agent\/conversations\?/.test(url)) {
+              return json({items: [{id: 'controlled-approval-conversation', state: 'idle',
+                message_count: 2, preview: 'Controlled approval status'}]});
+            }
+            if (/\/v1\/agent\/conversations\/[^/]+\/events\?/.test(url)
+                && !url.includes('controlled-approval-conversation')) {
+              if (!globalThis.__aipicAgentApprovalRefreshDelivered) {
+                globalThis.__aipicAgentApprovalRefreshDelivered = true;
+                return json({items: [{sequence_no: 1000, event_type: 'conversation.completed',
+                  payload: {conversation_id: 'controlled-prior-conversation'},
+                  created_at: new Date().toISOString()}], next_cursor: 1000});
+              }
+              return json({items: [], next_cursor: 1000});
+            }
+            if (/\/v1\/agent\/conversations\/controlled-approval-conversation\/messages\?/.test(url)) {
+              return json({
+                items: [{id: 'controlled-approval-call', role: 'assistant', content: [{
+                  type: 'tool_call', id: 'controlled-paid-call',
+                  name: 'image.transform_from_reference', arguments: {},
+                }]}],
+                pending_ui_actions: [{
+                  tool_call_id: 'controlled-paid-call',
+                  tool_name: 'image.transform_from_reference',
+                  result: {
+                    content: [{type: 'text', text: 'Approval is required.'}],
+                    details: {status: 'awaiting_ui_action', ui_action: {
+                      action_id: 'controlled-approval', type: 'approval_required',
+                    }},
+                    is_error: false,
+                  },
+                }],
+                event_cursor: 0,
+              });
+            }
+            if (/\/v1\/agent\/conversations\/controlled-approval-conversation\/events\?/.test(url)) {
+              return json({items: [], next_cursor: 0});
+            }
+            if (/\/v1\/approvals\/controlled-approval\/decision$/.test(url) && method === 'POST') {
+              globalThis.__aipicAgentApprovalDecision = JSON.parse(String(init.body || '{}'));
+              return json({status: 'queued', summary: 'Job queued.',
+                job: {job_id: 'controlled-job', job_type: 'image.transform'}});
+            }
+            if (/\/v1\/jobs\/controlled-job\?/.test(url)) {
+              return json({id: 'controlled-job', status: 'running', job_type: 'image.transform',
+                input_asset_ids: [], output_asset_ids: []});
+            }
+            return originalFetch(input, init);
+          };
+          const history = document.querySelector('button[aria-label="Conversation history"]');
+          if (!history) throw new Error('Agent history control is missing');
+          if (history.getAttribute('aria-expanded') !== 'true') history.click();
+          return true;
+        })()"""
+    )
+    wait_for(
+        connection,
+        "[...document.querySelectorAll('.agent-session-history button')].some((button) => button.textContent?.includes('Controlled approval status'))",
+        "the controlled approval conversation",
+        timeout,
+    )
+    connection.evaluate(
+        """[...document.querySelectorAll('.agent-session-history button')]
+          .find((button) => button.textContent?.includes('Controlled approval status'))?.click(); true"""
+    )
+    wait_for(
+        connection,
+        "!![...document.querySelectorAll('.agent-approval button')].find((button) => button.textContent?.includes('Approve and run'))",
+        "the Agent approval action",
+        timeout,
+    )
+    connection.evaluate(
+        """[...document.querySelectorAll('.agent-approval button')]
+          .find((button) => button.textContent?.includes('Approve and run'))?.click(); true"""
+    )
+    wait_for(
+        connection,
+        """globalThis.__aipicAgentApprovalDecision?.approved === true
+          && document.querySelector('.agent-run-status')?.textContent?.includes('Background task is running')
+          && !document.querySelector('.agent-run-status')?.textContent?.includes('Waiting for your approval')
+          && !document.querySelector('.agent-run-status')?.textContent?.includes('Agent is ready')
+          && document.querySelector('.agent-approval')?.textContent?.includes('Approved; task queued')""",
+        "the approved background-task state without a stale approval banner",
+        timeout,
+    )
+    return {
+        "scenario": "agent_approval_status",
+        "status": "passed",
+        "assertions": {
+            "approval_submitted": True,
+            "background_task_visible": True,
+            "waiting_approval_cleared": True,
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
         },
     }
 
@@ -895,6 +1255,406 @@ def run_image_canvas(connection: CdpConnection, timeout: float) -> None:
     )
 
 
+def run_local_image_size(connection: CdpConnection, timeout: float) -> dict[str, object]:
+    """Exercise local resize and bundled super-resolution through the real desktop DOM."""
+
+    if connection.evaluate("!!document.querySelector('.local-image-size-dialog')"):
+        connection.evaluate(
+            """(() => {
+              const cancel = [...document.querySelectorAll('.local-image-size-dialog button')]
+                .find((item) => item.textContent?.trim() === '取消');
+              if (!cancel) throw new Error('stale local image dialog cannot be closed');
+              cancel.click();
+            })()"""
+        )
+        wait_for(
+            connection,
+            "!document.querySelector('.local-image-size-dialog')",
+            "the stale local image dialog to close",
+            timeout,
+        )
+    if not connection.evaluate("!!document.querySelector('.image-workspace')"):
+        connection.evaluate(
+            """(() => {
+              const workspace = [...document.querySelectorAll('.primary-navigation button')]
+                .find((item) => item.textContent?.trim() === '工作区');
+              if (!workspace) throw new Error('workspace navigation is missing');
+              workspace.click();
+            })()"""
+        )
+        wait_for(
+            connection,
+            "!!document.querySelector('.workflow-switcher')",
+            "the product workspace navigation",
+            timeout,
+        )
+        connection.evaluate(
+            """(() => {
+              const image = document.querySelector('.workflow-switcher button[aria-label="当前图片"]');
+              if (!image) throw new Error('current image workspace control is missing');
+              image.click();
+            })()"""
+        )
+    wait_for(
+        connection,
+        "!!document.querySelector('.image-workspace img[src^=\"blob:\"]')",
+        "the managed image workspace",
+        timeout,
+    )
+    source_asset_id = connection.evaluate(
+        "document.querySelector('.image-workspace img')?.dataset.managedAssetId || ''"
+    )
+    if not source_asset_id:
+        raise AssertionError("the image preview is missing its managed asset identity")
+
+    def tool_requests(tool_name: str) -> list[dict[str, object]]:
+        connection.evaluate("true")
+        records = [
+            *(connection.evaluate("globalThis.__aipicE2E?.network || []") or []),
+            *cdp_network_records(connection),
+        ]
+        unique: dict[tuple[str, str], dict[str, object]] = {}
+        for item in records:
+            request = str(item.get("request", ""))
+            if tool_name not in request:
+                continue
+            unique[(str(item.get("url", "")), request)] = item
+        return list(unique.values())
+
+    def open_dialog() -> None:
+        connection.evaluate(
+            """(() => {
+              const more = [...document.querySelectorAll('.canvas-context-toolbar button')]
+                .find((item) => item.textContent?.trim() === '更多');
+              if (!more) throw new Error('More image tools control is missing');
+              more.click();
+            })()"""
+        )
+        wait_for(
+            connection,
+            "!!document.querySelector('.canvas-more-menu')",
+            "the expanded image tools menu",
+            timeout,
+        )
+        connection.evaluate(
+            """(() => {
+              const edit = [...document.querySelectorAll('.canvas-more-menu button')]
+                .find((item) => item.textContent?.includes('调整尺寸与超分'));
+              if (!edit || edit.getAttribute('aria-disabled') === 'true') {
+                throw new Error('local image size control is unavailable');
+              }
+              edit.click();
+            })()"""
+        )
+        wait_for(
+            connection,
+            "!!document.querySelector('.local-image-size-dialog[role=dialog]')",
+            "the local image size dialog",
+            timeout,
+        )
+
+    before_resize = tool_requests("image.normalize")
+    open_dialog()
+    dialog_text = connection.evaluate(
+        "document.querySelector('.local-image-size-dialog')?.innerText || ''"
+    )
+    for expected in ("本地图片处理", "普通缩放", "本地超分", "原图不会被覆盖"):
+        if expected not in dialog_text:
+            raise AssertionError(f"local image dialog is missing {expected!r}")
+    connection.evaluate(
+        """(() => {
+          const setInput = (label, value) => {
+            const input = document.querySelector(`[aria-label="${label}"]`);
+            if (!input) throw new Error(`${label} input is missing`);
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+            setter.call(input, value);
+            input.dispatchEvent(new Event('input', {bubbles: true}));
+            input.dispatchEvent(new Event('change', {bubbles: true}));
+          };
+          setInput('目标宽度', '320');
+          setInput('目标高度', '240');
+          const lock = document.querySelector('.local-image-checkbox input');
+          if (!lock || !lock.checked) throw new Error('aspect ratio control is missing');
+          lock.click();
+          const submit = [...document.querySelectorAll('.local-image-size-dialog button')]
+            .find((item) => item.textContent?.includes('生成缩放结果'));
+          if (!submit) throw new Error('resize submit control is missing');
+          submit.click();
+        })()"""
+    )
+    wait_for(
+        connection,
+        "!document.querySelector('.local-image-size-dialog')",
+        "the completed local resize",
+        timeout,
+    )
+    wait_for(
+        connection,
+        "document.querySelector('.current-asset-summary')?.textContent?.includes('320 × 240')",
+        "the resized dimensions",
+        timeout,
+    )
+    wait_for(
+        connection,
+        "(() => { const id = document.querySelector('.image-workspace img')?.dataset.managedAssetId; "
+        "return !!id && id !== " + json.dumps(source_asset_id) + "; })()",
+        "the newly selected resized asset",
+        timeout,
+    )
+    resized_asset_id = connection.evaluate(
+        "document.querySelector('.image-workspace img')?.dataset.managedAssetId || ''"
+    )
+    if not resized_asset_id or resized_asset_id == source_asset_id:
+        raise AssertionError("local resize did not select a new managed asset")
+    resize_requests = tool_requests("image.normalize")
+    if len(resize_requests) != len(before_resize) + 1:
+        raise AssertionError("local resize did not issue exactly one image.normalize request")
+
+    before_upscale = tool_requests("image.upscale_local")
+    open_dialog()
+    connection.evaluate(
+        """(() => {
+          const upscale = [...document.querySelectorAll('.local-image-mode button')]
+            .find((item) => item.textContent?.trim() === '本地超分');
+          if (!upscale) throw new Error('local upscale mode is missing');
+          upscale.click();
+        })()"""
+    )
+    wait_for(
+        connection,
+        "[...document.querySelectorAll('.local-image-mode button')].some((item) => item.textContent?.trim() === '本地超分' && item.getAttribute('aria-pressed') === 'true')",
+        "the selected local upscale mode",
+        timeout,
+    )
+    connection.evaluate(
+        """(() => {
+          const submit = [...document.querySelectorAll('.local-image-size-dialog button')]
+            .find((item) => item.textContent?.includes('开始本地超分'));
+          if (!submit) throw new Error('local upscale submit control is missing');
+          submit.click();
+        })()"""
+    )
+    wait_for(
+        connection,
+        "!!document.querySelector('.jobs-panel')",
+        "the queued local upscale job",
+        timeout,
+    )
+    upscale_requests = tool_requests("image.upscale_local")
+    if len(upscale_requests) != len(before_upscale) + 1:
+        raise AssertionError("local upscale did not issue exactly one image.upscale_local request")
+    upscale_request = str(upscale_requests[-1].get("request", ""))
+    upscale_payload = json.loads(upscale_request)
+    upscale_arguments = upscale_payload.get("arguments", {})
+    if (
+        "approval" in upscale_request.casefold()
+        or upscale_payload.get("provider_profile") is not None
+        or "provider_profile" in upscale_arguments
+    ):
+        raise AssertionError("local upscale unexpectedly used approval or Provider arguments")
+
+    return {
+        "scenario": "local_image_size",
+        "status": "passed",
+        "assertions": {
+            "source_asset_preserved": True,
+            "resize_tool": "image.normalize",
+            "resized_dimensions": "320x240",
+            "resized_asset_selected": True,
+            "upscale_tool": "image.upscale_local",
+            "upscale_scale": 2,
+            "provider_approval_requests": 0,
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
+        },
+    }
+
+
+def run_asset_visual_dedup(connection: CdpConnection, timeout: float) -> dict[str, object]:
+    """Prove resized copies stay in storage while the asset browser renders one card."""
+
+    def open_assets() -> None:
+        if connection.evaluate("!!document.querySelector('.asset-browser')"):
+            connection.evaluate(
+                """(() => {
+                  const button = [...document.querySelectorAll('.primary-navigation button')]
+                    .find((item) => item.textContent?.trim() === '工作区');
+                  if (!button) throw new Error('workspace navigation is missing');
+                  button.click();
+                })()"""
+            )
+            wait_for(
+                connection,
+                "!document.querySelector('.asset-browser')",
+                "the asset browser to unmount",
+                timeout,
+            )
+        connection.evaluate(
+            """(() => {
+              const button = [...document.querySelectorAll('.primary-navigation button')]
+                .find((item) => item.textContent?.trim() === '资产');
+              if (!button) throw new Error('asset navigation is missing');
+              button.click();
+            })()"""
+        )
+        wait_for(
+            connection,
+            "!!document.querySelector('.asset-browser .asset-list')",
+            "the asset browser",
+            timeout,
+        )
+        wait_for(
+            connection,
+            "(globalThis.__aipicE2E?.network || []).some((item) => "
+            "String(item.url || '').includes('include_visual_identities=true'))",
+            "the visual-identity asset query",
+            timeout,
+        )
+        wait_for(
+            connection,
+            "document.querySelectorAll('.asset-card').length > 0",
+            "the rendered asset cards",
+            timeout,
+        )
+
+    def raw_assets() -> list[dict[str, object]]:
+        result = connection.evaluate(
+            """(() => {
+              const record = [...(globalThis.__aipicE2E?.network || [])]
+                .reverse()
+                .find((item) => item.status === 200
+                  && String(item.url || '').includes('include_visual_identities=true')
+                  && typeof item.response === 'string' && item.response.length > 0);
+              if (!record) return null;
+              return JSON.parse(record.response);
+            })()"""
+        )
+        if not isinstance(result, list):
+            raise AssertionError("the authorized visual-identity asset response is unavailable")
+        return result
+
+    def visual_distance(left: str, right: str) -> float:
+        if len(left) != len(right) or not left:
+            return 1.0
+        try:
+            different_bits = sum(
+                (int(left[index], 16) ^ int(right[index], 16)).bit_count()
+                for index in range(len(left))
+            )
+        except ValueError:
+            return 1.0
+        return different_bits / (len(left) * 4)
+
+    def duplicate_pair(
+        assets: list[dict[str, object]],
+    ) -> tuple[dict[str, object], dict[str, object], float] | None:
+        library_image_types = {
+            "source_image",
+            "generated_image",
+            "annotation",
+            "crop",
+            "multiview",
+        }
+        images = [
+            asset
+            for asset in assets
+            if asset.get("asset_type") in library_image_types
+            and isinstance(asset.get("visual_fingerprint"), str)
+            and isinstance(asset.get("visual_aspect_ratio"), (int, float))
+            and isinstance(asset.get("sha256"), str)
+        ]
+        for index, left in enumerate(images):
+            for right in images[index + 1 :]:
+                if left["sha256"] == right["sha256"]:
+                    continue
+                if abs(float(left["visual_aspect_ratio"]) - float(right["visual_aspect_ratio"])) > 0.025:
+                    continue
+                distance = visual_distance(
+                    str(left["visual_fingerprint"]), str(right["visual_fingerprint"])
+                )
+                if distance <= 0.08:
+                    return left, right, distance
+        return None
+
+    open_assets()
+    assets = raw_assets()
+    pair = duplicate_pair(assets)
+    if pair is None:
+        run_local_image_size(connection, timeout)
+        open_assets()
+        assets = raw_assets()
+        pair = duplicate_pair(assets)
+    if pair is None:
+        raise AssertionError("no resized visual-duplicate pair was returned by the asset API")
+
+    left, right, distance = pair
+    duplicate_ids = [str(left["id"]), str(right["id"])]
+    expected = next((asset for asset in (left, right) if asset.get("is_current")), None)
+    if expected is None:
+        expected = max(
+            (left, right),
+            key=lambda asset: int((asset.get("metadata") or {}).get("width") or 0)
+            * int((asset.get("metadata") or {}).get("height") or 0),
+        )
+
+    rendered_ids = connection.evaluate(
+        "[...document.querySelectorAll('.asset-card')].map((item) => item.dataset.assetId)"
+    )
+    rendered_duplicates = [asset_id for asset_id in duplicate_ids if asset_id in rendered_ids]
+    if rendered_duplicates != [str(expected["id"])]:
+        raise AssertionError(
+            "asset browser did not keep exactly the preferred visual-duplicate representative"
+        )
+
+    original_columns = connection.evaluate(
+        "document.querySelector('.asset-list')?.dataset.columns || '4'"
+    )
+    tested_columns: list[int] = []
+    for columns in range(3, 9):
+        connection.evaluate(
+            """(() => {
+              const expected = '每行 """
+            + str(columns)
+            + """ 个资产';
+              const button = [...document.querySelectorAll('.asset-layout-options button')]
+                .find((item) => item.getAttribute('aria-label') === expected);
+              if (!button) throw new Error('asset column control is missing');
+              button.click();
+            })()"""
+        )
+        wait_for(
+            connection,
+            f"document.querySelector('.asset-list')?.dataset.columns === '{columns}' "
+            f"&& document.querySelector('button[aria-label=\"每行 {columns} 个资产\"]')?.getAttribute('aria-pressed') === 'true'",
+            f"the {columns}-column asset layout",
+            timeout,
+        )
+        tested_columns.append(columns)
+    if str(original_columns) in {str(value) for value in range(3, 9)}:
+        connection.evaluate(
+            "document.querySelector('button[aria-label=\"每行 "
+            + str(original_columns)
+            + " 个资产\"]')?.click()"
+        )
+
+    return {
+        "scenario": "asset_visual_dedup",
+        "status": "passed",
+        "assertions": {
+            "raw_visual_duplicate_count": 2,
+            "different_sha256": True,
+            "visual_fingerprints_present": True,
+            "visual_distance": round(distance, 4),
+            "rendered_duplicate_cards": 1,
+            "preferred_representative_kept": True,
+            "supported_columns": tested_columns,
+            "original_column_layout_restored": True,
+            "runtime_errors": 0,
+            "unhandled_rejections": 0,
+        },
+    }
+
+
 def run_mock_tripo_approval(connection: CdpConnection, timeout: float) -> None:
     """Prove that 3D generation cannot bypass its desktop approval dialog."""
 
@@ -1077,8 +1837,10 @@ def run_agent_image_result_navigation(
             assetId: null,
             apiOrigin: null,
             requestHeaders: null,
-            eventsDelivered: false,
-            continuationPosts: 0,
+            eventStage: 0,
+            terminalEventsDelivered: 0,
+            messageReads: 0,
+            thumbnailReads: 0,
             jobReads: 0,
           };
           globalThis.fetch = async (...args) => {
@@ -1089,10 +1851,70 @@ def run_agent_image_result_navigation(
             const method = String(init.method || request?.method || 'GET').toUpperCase();
             const controlled = globalThis.__aipicAgentImageResult;
 
-            if (!controlled.eventsDelivered && /\/v1\/agent\/conversations\/[^/]+\/events\?/.test(url)) {
+            if (/\/v1\/agent\/conversations\/[^/]+\/events\?/.test(url)) {
               const eventUrl = new URL(url, location.href);
               const projectId = eventUrl.searchParams.get('project_id');
               if (!projectId) throw new Error('controlled Agent event has no project identity');
+              if (controlled.eventStage === 1 && controlled.jobReads > 0) {
+                controlled.eventStage = 2;
+                controlled.terminalEventsDelivered += 1;
+                const resultMessage = {
+                  id: 'controlled-image-result',
+                  role: 'tool_result',
+                  tool_call_id: 'controlled-image-call',
+                  tool_name: 'generate_images',
+                  content: [{type: 'text', text: 'Controlled image generation completed.'}],
+                  details: {
+                    status: 'succeeded',
+                    output_asset_ids: [controlled.assetId],
+                    job: {
+                      job_id: 'controlled-image-job',
+                      status: 'succeeded',
+                      job_type: 'image.generate',
+                      stage: 'completed',
+                      provider: 'controlled/fixture',
+                    },
+                  },
+                  is_error: false,
+                };
+                const finalMessage = {
+                  id: 'controlled-image-final',
+                  role: 'assistant',
+                  content: [{
+                    type: 'text',
+                    text: `图片已生成：\n\n![受管结果](asset:${controlled.assetId})`,
+                  }],
+                  stop_reason: 'stop',
+                };
+                return new Response(JSON.stringify({
+                  items: [
+                    {
+                      sequence_no: 910003,
+                      event_type: 'message.completed',
+                      payload: {conversation_id: 'controlled-conversation', message: resultMessage},
+                      created_at: new Date().toISOString(),
+                    },
+                    {
+                      sequence_no: 910004,
+                      event_type: 'message.completed',
+                      payload: {conversation_id: 'controlled-conversation', message: finalMessage},
+                      created_at: new Date().toISOString(),
+                    },
+                    {
+                      sequence_no: 910005,
+                      event_type: 'conversation.completed',
+                      payload: {conversation_id: 'controlled-conversation'},
+                      created_at: new Date().toISOString(),
+                    },
+                  ],
+                  next_cursor: 910005,
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+              }
+              if (controlled.eventStage > 0) {
+                return new Response(JSON.stringify({
+                  items: [], next_cursor: controlled.eventStage === 2 ? 910005 : 910002,
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+              }
               const requestHeaders = new Headers(request?.headers || init.headers || {});
               const assetsResponse = await original(
                 `${eventUrl.origin}/v1/projects/${encodeURIComponent(projectId)}/assets?include_trashed=false`,
@@ -1110,7 +1932,7 @@ def run_agent_image_result_navigation(
               controlled.assetId = imageAsset.id;
               controlled.apiOrigin = eventUrl.origin;
               controlled.requestHeaders = requestHeaders;
-              controlled.eventsDelivered = true;
+              controlled.eventStage = 1;
               return new Response(JSON.stringify({
                 items: [
                   {
@@ -1160,6 +1982,70 @@ def run_agent_image_result_navigation(
               }), {status: 200, headers: {'Content-Type': 'application/json'}});
             }
 
+            if (
+              method === 'GET'
+              && controlled.eventStage === 2
+              && /\/v1\/agent\/conversations\/[^/]+\/messages\?/.test(url)
+            ) {
+              controlled.messageReads += 1;
+              return new Response(JSON.stringify({
+                items: [
+                  {
+                    id: 'controlled-image-call-message',
+                    role: 'assistant',
+                    content: [{
+                      type: 'tool_call',
+                      id: 'controlled-image-call',
+                      name: 'generate_images',
+                      arguments: {candidate_count: 1, aspect_ratio: '1:1'},
+                    }],
+                    stop_reason: 'tool_use',
+                  },
+                  {
+                    id: 'controlled-image-result',
+                    role: 'tool_result',
+                    tool_call_id: 'controlled-image-call',
+                    tool_name: 'generate_images',
+                    content: [{type: 'text', text: 'Controlled image generation completed.'}],
+                    details: {
+                      status: 'succeeded',
+                      output_asset_ids: [controlled.assetId],
+                      job: {
+                        job_id: 'controlled-image-job',
+                        status: 'succeeded',
+                        job_type: 'image.generate',
+                        stage: 'completed',
+                        provider: 'controlled/fixture',
+                      },
+                    },
+                    is_error: false,
+                  },
+                  {
+                    id: 'controlled-image-final',
+                    role: 'assistant',
+                    content: [{
+                      type: 'text',
+                      text: `图片已生成：\n\n![受管结果](asset:${controlled.assetId})`,
+                    }],
+                    stop_reason: 'stop',
+                  },
+                ],
+                event_cursor: 910005,
+                next_before: null,
+                has_more: false,
+                pending_ui_actions: [],
+              }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+
+            if (
+              method === 'GET'
+              && controlled.assetId
+              && url.includes(`/v1/assets/${encodeURIComponent(controlled.assetId)}/thumbnail?`)
+            ) {
+              controlled.thumbnailReads += 1;
+              return original(...args);
+            }
+
             if (/\/v1\/jobs\/controlled-image-job\?/.test(url)) {
               controlled.jobReads += 1;
               return new Response(JSON.stringify({
@@ -1181,18 +2067,6 @@ def run_agent_image_result_navigation(
               }), {status: 200, headers: {'Content-Type': 'application/json'}});
             }
 
-            if (method === 'POST' && /\/v1\/agent\/conversations\/[^/]+\/messages$/.test(url)) {
-              const body = JSON.parse(String(init.body || '{}'));
-              if (String(body.request_id || '').startsWith('agent-job-terminal-controlled-image-job')) {
-                controlled.continuationPosts += 1;
-                return new Response(JSON.stringify({
-                  id: 'controlled-conversation',
-                  project_id: controlled.projectId,
-                  state: 'running',
-                  message_count: 0,
-                }), {status: 200, headers: {'Content-Type': 'application/json'}});
-              }
-            }
             return original(...args);
           };
           return {installed: true};
@@ -1223,8 +2097,31 @@ def run_agent_image_result_navigation(
         )
         wait_for(
             connection,
-            "globalThis.__aipicAgentImageResult?.continuationPosts === 1",
-            "the intercepted Agent terminal continuation",
+            "globalThis.__aipicAgentImageResult?.terminalEventsDelivered === 1",
+            "the broker-delivered Agent terminal result",
+            timeout,
+        )
+        wait_for(
+            connection,
+            (
+                "(() => { const image = document.querySelector('.agent-inline-image img'); "
+                "if (!image || !image.src.startsWith('blob:') || image.alt !== '受管结果' "
+                "|| !image.complete || image.naturalWidth <= 0) return false; "
+                "const box = image.getBoundingClientRect(); return Math.abs(box.width - 80) <= 1 "
+                "&& Math.abs(box.height - 80) <= 1; })()"
+            ),
+            "the compact inline Blob-backed final-response image",
+            timeout,
+        )
+        wait_for(
+            connection,
+            (
+                "globalThis.__aipicAgentImageResult?.messageReads >= 1 "
+                "&& globalThis.__aipicAgentImageResult?.thumbnailReads >= 1 "
+                "&& !document.querySelector('.agent-message.assistant img[src^=\"asset:\"]') "
+                "&& !document.querySelector('.agent-message.assistant .agent-chat-images')"
+            ),
+            "the durable final transcript without raw or duplicate image previews",
             timeout,
         )
         wait_for(
@@ -1248,16 +2145,30 @@ def run_agent_image_result_navigation(
             """(() => {
               const controlled = globalThis.__aipicAgentImageResult;
               const images = [...document.querySelectorAll('.prompt-image-results img')];
+              const inlineImage = document.querySelector('.agent-inline-image img');
+              const inlineBox = inlineImage?.getBoundingClientRect();
               return {
                 workspaceVisible: !!document.querySelector('.prompt-image-workspace'),
                 resultVisible: !!document.querySelector('.prompt-image-results'),
                 resultAssetId: controlled.assetId,
                 jobReads: controlled.jobReads,
-                continuationPosts: controlled.continuationPosts,
+                terminalEventsDelivered: controlled.terminalEventsDelivered,
+                messageReads: controlled.messageReads,
+                thumbnailReads: controlled.thumbnailReads,
                 previewCount: images.length,
                 decodedBlobPreviews: images.filter((item) =>
                   item.src.startsWith('blob:') && item.complete && item.naturalWidth > 0
                 ).length,
+                inlineBlobPreview: Boolean(inlineImage?.src.startsWith('blob:')),
+                inlineAlt: inlineImage?.alt || '',
+                inlineWidth: inlineBox?.width || 0,
+                inlineHeight: inlineBox?.height || 0,
+                rawAssetImages: document.querySelectorAll(
+                  '.agent-message.assistant img[src^="asset:"]'
+                ).length,
+                duplicateGallery: Boolean(document.querySelector(
+                  '.agent-message.assistant .agent-chat-images'
+                )),
               };
             })()"""
         )
@@ -1283,9 +2194,17 @@ def run_agent_image_result_navigation(
             "result_asset_id": result["resultAssetId"],
             "job_id": "controlled-image-job",
             "job_reads": result["jobReads"],
-            "terminal_continuations": result["continuationPosts"],
+            "terminal_events_delivered": result["terminalEventsDelivered"],
+            "message_reads": result["messageReads"],
+            "thumbnail_reads": result["thumbnailReads"],
             "preview_count": result["previewCount"],
             "decoded_blob_previews": result["decodedBlobPreviews"],
+            "inline_blob_preview": result["inlineBlobPreview"],
+            "inline_alt": result["inlineAlt"],
+            "inline_width": result["inlineWidth"],
+            "inline_height": result["inlineHeight"],
+            "raw_asset_images": result["rawAssetImages"],
+            "duplicate_gallery": result["duplicateGallery"],
             "workspace_job_persisted": True,
             "runtime_errors": 0,
             "unhandled_rejections": 0,
@@ -2686,6 +3605,10 @@ def main() -> int:
     parser.add_argument("--create-project", action="store_true")
     parser.add_argument("--import-image", action="store_true")
     parser.add_argument("--image-canvas", action="store_true")
+    parser.add_argument("--local-image-size", action="store_true")
+    parser.add_argument("--asset-visual-dedup", action="store_true")
+    parser.add_argument("--asset-file-actions", action="store_true")
+    parser.add_argument("--asset-remove", action="store_true")
     parser.add_argument("--mock-tripo-approval", action="store_true")
     parser.add_argument("--open-model-result", action="store_true")
     parser.add_argument("--agent-ui-action-navigation", action="store_true")
@@ -2693,6 +3616,7 @@ def main() -> int:
     parser.add_argument("--agent-target-extraction-result-sync", action="store_true")
     parser.add_argument("--agent-analysis-result-sync", action="store_true")
     parser.add_argument("--agent-image-attachment", action="store_true")
+    parser.add_argument("--agent-approval-status", action="store_true")
     parser.add_argument("--agent-image-path", type=Path, nargs="+")
     parser.add_argument("--prompt-rewrite", action="store_true")
     parser.add_argument("--prompt-candidate-counts", action="store_true")
@@ -2739,6 +3663,14 @@ def main() -> int:
         if args.agent_ui_action_navigation:
             run_agent_ui_action_navigation(connection, args.timeout)
         interaction_summary = None
+        if args.local_image_size:
+            interaction_summary = run_local_image_size(connection, args.timeout)
+        if args.asset_visual_dedup:
+            interaction_summary = run_asset_visual_dedup(connection, args.timeout)
+        if args.asset_file_actions:
+            interaction_summary = run_asset_file_actions(connection, args.timeout)
+        if args.asset_remove:
+            interaction_summary = run_asset_remove(connection, args.timeout)
         if args.agent_image_result_navigation:
             interaction_summary = run_agent_image_result_navigation(
                 connection, args.timeout
@@ -2755,6 +3687,8 @@ def main() -> int:
             interaction_summary = run_agent_image_attachment(
                 connection, args.timeout, args.agent_image_path or []
             )
+        if args.agent_approval_status:
+            interaction_summary = run_agent_approval_status(connection, args.timeout)
         if args.prompt_rewrite:
             interaction_summary = run_prompt_rewrite(connection, args.timeout)
         if args.prompt_candidate_counts:
@@ -2820,6 +3754,26 @@ def main() -> int:
             json.dumps(interaction_summary, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+    if args.local_image_size and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if args.asset_visual_dedup and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if args.asset_file_actions and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if args.asset_remove and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     if args.model_fallback_visual and interaction_summary is not None:
         (args.output / "interaction-summary.json").write_text(
             json.dumps(interaction_summary, ensure_ascii=False, indent=2),
@@ -2860,6 +3814,11 @@ def main() -> int:
             encoding="utf-8",
         )
     if args.agent_image_attachment and interaction_summary is not None:
+        (args.output / "interaction-summary.json").write_text(
+            json.dumps(interaction_summary, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if args.agent_approval_status and interaction_summary is not None:
         (args.output / "interaction-summary.json").write_text(
             json.dumps(interaction_summary, ensure_ascii=False, indent=2),
             encoding="utf-8",

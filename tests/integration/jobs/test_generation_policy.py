@@ -190,7 +190,7 @@ def test_local_single_image_3d_is_immediate_but_multiview_remains_paid(
             "mode": "image",
             "image_asset_id": image_id,
             "provider_profile": "tripo3d/default",
-            "model": "tripo-v2.5-20250123",
+            "model": "v3.1-20260211",
             "parameters": {"pbr": True},
         },
         "local-3d-request",
@@ -200,6 +200,10 @@ def test_local_single_image_3d_is_immediate_but_multiview_remains_paid(
     stored = _tool_call(root / "project.sqlite3", local.tool_call_id)
     assert stored["risk_level"] == "local_reversible"
     assert cast(dict[str, object], stored["arguments"])["model"] == "stabilityai/TripoSR"
+    assert cast(dict[str, object], stored["arguments"])["parameters"] == {
+        "pbr": False,
+        "texture": True,
+    }
 
     paid = dependencies.registry.execute(
         root,

@@ -13,6 +13,7 @@ from ..contracts.agent import (
     ActivateSkillRequest,
     AgentConversationRequest,
     AgentQueueMessageRequest,
+    CompleteMultiviewActionRequest,
     CreateConversationRequest,
     SendAgentMessageRequest,
 )
@@ -37,7 +38,7 @@ def build_agent_router(guard: OriginGuard, runtime: AgentRuntime) -> APIRouter:
     @router.get(
         "/v1/agent/conversations/{conversation_id}/messages", dependencies=[Depends(guard.check)]
     )
-    def messages(
+    async def messages(
         conversation_id: str,
         project_id: str,
         limit: int | None = None,
@@ -47,6 +48,7 @@ def build_agent_router(guard: OriginGuard, runtime: AgentRuntime) -> APIRouter:
             raise HTTPException(422, detail={"code": "SCHEMA_VALIDATION_FAILED"})
         if before is not None and before < 1:
             raise HTTPException(422, detail={"code": "SCHEMA_VALIDATION_FAILED"})
+        await runtime.resume_terminal_waits(project_id, conversation_id)
         page = runtime.message_page(
             project_id,
             conversation_id,
@@ -88,6 +90,27 @@ def build_agent_router(guard: OriginGuard, runtime: AgentRuntime) -> APIRouter:
         if request.state.request_id != body.request_id:
             raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT"})
         return await runtime.abort(body.project_id, conversation_id)
+
+    @router.post(
+        "/v1/agent/ui-actions/{action_id}/complete-multiview",
+        dependencies=[Depends(guard.check)],
+    )
+    async def complete_multiview_action(
+        action_id: str, body: CompleteMultiviewActionRequest, request: Request
+    ):
+        if request.state.request_id != body.request_id:
+            raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT"})
+        try:
+            return await runtime.complete_multiview_ui_action(
+                body.project_id,
+                action_id,
+                body.multiview_ref,
+                dict(body.view_asset_refs),
+            )
+        except (KeyError, ValueError) as error:
+            raise HTTPException(
+                409, detail={"code": "AGENT_UI_ACTION_INVALID"}
+            ) from error
 
     @router.post(
         "/v1/agent/conversations/{conversation_id}/queue", dependencies=[Depends(guard.check)]

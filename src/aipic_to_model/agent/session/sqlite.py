@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -80,6 +80,10 @@ class LinearSessionRepository:
                 Path(__file__).parent / "migrations" / "0005_agent_api_events.sql"
             ).read_bytes()
             self._apply_migration(connection, 5, script5)
+            script6 = (
+                Path(__file__).parent / "migrations" / "0006_agent_job_waits.sql"
+            ).read_bytes()
+            self._apply_migration(connection, 6, script6)
 
     def create(
         self,
@@ -350,6 +354,305 @@ class LinearSessionRepository:
                     "UPDATE agent_sessions SET updated_at=? WHERE id=?", (_now(), session_id)
                 )
 
+    def append_or_replace_waiting_tool_result(
+        self, session_id: str, message: ToolResultMessage
+    ) -> bool:
+        """Persist exactly one terminal result for an approval-suspended Tool Call.
+
+        Builds before durable wait recovery wrote a non-terminal ``waiting_external``
+        result into the transcript. Replace that legacy placeholder in place so a
+        recovered conversation never contains two results for one Tool Call.
+        """
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT sequence_no,message_json FROM agent_messages
+                WHERE session_id=? AND tool_call_id=? ORDER BY sequence_no DESC LIMIT 1""",
+                (session_id, message.tool_call_id),
+            ).fetchone()
+            if row is not None:
+                existing = message_from_json(str(row["message_json"]))
+                if not isinstance(existing, ToolResultMessage):
+                    return False
+                details = existing.result.details
+                status = details.get("status") if isinstance(details, dict) else None
+                if status != "waiting_external":
+                    return False
+                replacement = replace(
+                    message,
+                    id=existing.id,
+                    timestamp=existing.timestamp,
+                )
+                connection.execute(
+                    """UPDATE agent_messages SET message_json=?
+                    WHERE session_id=? AND sequence_no=?""",
+                    (replacement.to_json(), session_id, row["sequence_no"]),
+                )
+                connection.execute(
+                    "UPDATE agent_sessions SET updated_at=? WHERE id=?",
+                    (_now(), session_id),
+                )
+                return True
+            sequence = connection.execute(
+                "SELECT COALESCE(MAX(sequence_no),0)+1 FROM agent_messages WHERE session_id=?",
+                (session_id,),
+            ).fetchone()[0]
+            connection.execute(
+                "INSERT INTO agent_messages VALUES(?,?,?,?,?,?)",
+                (
+                    session_id,
+                    sequence,
+                    message.id,
+                    message.role,
+                    message.to_json(),
+                    message.tool_call_id,
+                ),
+            )
+            connection.execute(
+                "UPDATE agent_sessions SET updated_at=? WHERE id=?", (_now(), session_id)
+            )
+            return True
+
+    def register_job_wait(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        run_id: str,
+        tool_call_id: str,
+        tool_name: str,
+    ) -> None:
+        """Persist an approval-sideband Tool call without inventing a TaskPlan."""
+
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO agent_job_waits(
+                session_id,project_id,run_id,tool_call_id,tool_name,state,created_at
+                ) VALUES(?,?,?,?,?,?,?)""",
+                (
+                    session_id,
+                    project_id,
+                    run_id,
+                    tool_call_id,
+                    tool_name,
+                    "awaiting_ui_action",
+                    _now(),
+                ),
+            )
+
+    def bind_job_wait(self, session_id: str, tool_call_id: str, job_id: str) -> bool:
+        with self._connect() as connection:
+            changed = connection.execute(
+                """UPDATE agent_job_waits SET job_id=?,state='waiting',resumed_at=?
+                WHERE session_id=? AND tool_call_id=? AND state='awaiting_ui_action'""",
+                (job_id, _now(), session_id, tool_call_id),
+            )
+            return changed.rowcount == 1
+
+    def complete_job_wait(self, session_id: str, tool_call_id: str, state: str) -> bool:
+        if state not in {"terminal_returned", "waiting_external", "declined"}:
+            raise ValueError("invalid job wait terminal state")
+        with self._connect() as connection:
+            source_states = (
+                ("awaiting_ui_action", "waiting", "waiting_external")
+                if state == "terminal_returned"
+                else ("waiting", "waiting_external")
+                if state == "waiting_external"
+                else ("awaiting_ui_action", "waiting", "waiting_external")
+            )
+            placeholders = ",".join("?" for _item in source_states)
+            changed = connection.execute(
+                f"""UPDATE agent_job_waits SET state=?,resumed_at=? WHERE session_id=?
+                AND tool_call_id=? AND state IN({placeholders})""",
+                (state, _now(), session_id, tool_call_id, *source_states),
+            )
+            return changed.rowcount == 1
+
+    def job_wait_for_tool(self, project_id: str, tool_call_id: str) -> dict[str, object] | None:
+        self.migrate()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT session_id,project_id,run_id,tool_call_id,tool_name,job_id,state
+                FROM agent_job_waits WHERE project_id=? AND tool_call_id=?""",
+                (project_id, tool_call_id),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def job_wait_for_approval(
+        self, project_id: str, approval_id: str
+    ) -> dict[str, object] | None:
+        """Find the suspended Agent Tool Call bound to one durable approval.
+
+        Atomic B02 Tool Calls have an internal ID while provider Tool Calls use
+        the model-facing facade ID. The approval action ID is the durable,
+        parameter-bound identifier shared by both layers, so it is the only
+        safe join key at the desktop approval boundary.
+        """
+
+        self.migrate()
+        with self._connect() as connection:
+            waits = list(
+                connection.execute(
+                    "SELECT session_id,project_id,run_id,tool_call_id,tool_name,job_id,state "
+                    "FROM agent_job_waits WHERE project_id=? "
+                    "AND state IN('awaiting_ui_action','terminal_returned') ORDER BY created_at",
+                    (project_id,),
+                )
+            )
+            for wait in waits:
+                events = connection.execute(
+                    "SELECT payload_json FROM agent_api_events WHERE session_id=? "
+                    "AND event_type='tool.completed' ORDER BY sequence_no DESC",
+                    (wait["session_id"],),
+                )
+                for event in events:
+                    try:
+                        payload = json.loads(str(event["payload_json"]))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(payload, dict) or payload.get("tool_call_id") != wait["tool_call_id"]:
+                        continue
+                    result = payload.get("result")
+                    details = result.get("details") if isinstance(result, dict) else None
+                    action = details.get("ui_action") if isinstance(details, dict) else None
+                    if isinstance(action, dict) and action.get("action_id") == approval_id:
+                        return dict(wait)
+        return None
+
+    def job_wait_for_ui_action(
+        self, project_id: str, action_id: str, action_type: str
+    ) -> dict[str, object] | None:
+        """Find one suspended desktop action by its durable action id and type."""
+
+        self.migrate()
+        with self._connect() as connection:
+            waits = list(
+                connection.execute(
+                    "SELECT session_id,project_id,run_id,tool_call_id,tool_name,job_id,state "
+                    "FROM agent_job_waits WHERE project_id=? AND state='awaiting_ui_action' "
+                    "ORDER BY created_at",
+                    (project_id,),
+                )
+            )
+            for wait in waits:
+                events = connection.execute(
+                    "SELECT payload_json FROM agent_api_events WHERE session_id=? "
+                    "AND event_type='tool.completed' ORDER BY sequence_no DESC",
+                    (wait["session_id"],),
+                )
+                for event in events:
+                    try:
+                        payload = json.loads(str(event["payload_json"]))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(payload, dict) or payload.get("tool_call_id") != wait["tool_call_id"]:
+                        continue
+                    result = payload.get("result")
+                    details = result.get("details") if isinstance(result, dict) else None
+                    action = details.get("ui_action") if isinstance(details, dict) else None
+                    if (
+                        isinstance(action, dict)
+                        and action.get("action_id") == action_id
+                        and action.get("type") == action_type
+                    ):
+                        return dict(wait)
+        return None
+
+    def active_job_waits(self, project_id: str) -> list[dict[str, object]]:
+        self.migrate()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT session_id,project_id,run_id,tool_call_id,tool_name,job_id,state
+                FROM agent_job_waits WHERE project_id=?
+                AND state IN('awaiting_ui_action','waiting','waiting_external')""",
+                (project_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def resumable_job_waits(self, session_id: str) -> list[dict[str, object]]:
+        """Return approved waits that need monitoring or Agent continuation."""
+
+        self.migrate()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT session_id,project_id,run_id,tool_call_id,tool_name,job_id,state
+                FROM agent_job_waits WHERE session_id=?
+                AND state IN('waiting','waiting_external','terminal_returned')
+                ORDER BY resumed_at,created_at""",
+                (session_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def terminal_job_waits(self, session_id: str) -> list[dict[str, object]]:
+        """Return completed approval waits that may still need an Agent reply."""
+
+        self.migrate()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT session_id,project_id,run_id,tool_call_id,tool_name,job_id,state "
+                "FROM agent_job_waits WHERE session_id=? AND state='terminal_returned' "
+                "ORDER BY resumed_at,created_at",
+                (session_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def pending_ui_actions(self, session_id: str) -> list[dict[str, object]]:
+        """Recover desktop-only approval actions without closing their Tool Calls.
+
+        ``awaiting_ui_action`` is deliberately not appended to the Agent
+        transcript: doing so would make the model treat the suspended Tool Call
+        as complete. The desktop still needs a durable way to restore its
+        approval controls after a refresh or conversation switch, so replay the
+        already-redacted ``tool.completed`` event for active waits only.
+        """
+
+        self.migrate()
+        with self._connect() as connection:
+            waits = list(
+                connection.execute(
+                    "SELECT tool_call_id,tool_name FROM agent_job_waits "
+                    "WHERE session_id=? AND state='awaiting_ui_action' "
+                    "ORDER BY created_at",
+                    (session_id,),
+                )
+            )
+            events = list(
+                connection.execute(
+                    "SELECT payload_json FROM agent_api_events WHERE session_id=? "
+                    "AND event_type='tool.completed' ORDER BY sequence_no DESC",
+                    (session_id,),
+                )
+            )
+        by_call: dict[str, dict[str, object]] = {}
+        for event in events:
+            try:
+                payload = json.loads(str(event["payload_json"]))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            call_id = payload.get("tool_call_id")
+            result = payload.get("result")
+            details = result.get("details") if isinstance(result, dict) else None
+            if (
+                not isinstance(call_id, str)
+                or not isinstance(result, dict)
+                or not isinstance(details, dict)
+                or details.get("status") != "awaiting_ui_action"
+                or not isinstance(details.get("ui_action"), dict)
+            ):
+                continue
+            by_call.setdefault(call_id, result)
+        return [
+            {
+                "tool_call_id": str(wait["tool_call_id"]),
+                "tool_name": str(wait["tool_name"]),
+                "result": by_call[str(wait["tool_call_id"])],
+            }
+            for wait in waits
+            if str(wait["tool_call_id"]) in by_call
+        ]
+
     async def listener(self, session_id: str, operation_id: str, event: AgentEvent) -> None:
         if event.type is AgentEventType.MESSAGE_END and isinstance(
             event.payload.get("message"), dict
@@ -411,6 +714,25 @@ class LinearSessionRepository:
                 (session_id,),
             ).fetchone()
         return int(row[0])
+
+    def latest_api_event_payload(
+        self, session_id: str, event_type: str
+    ) -> dict[str, object] | None:
+        """Return one durable event payload without making event history a new schema."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM agent_api_events WHERE session_id=? AND event_type=? "
+                "ORDER BY sequence_no DESC LIMIT 1",
+                (session_id, event_type),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(str(row["payload_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
 
     def terminal_error_code(self, session_id: str) -> str | None:
         """Return the durable outcome of the most recent conversation run.

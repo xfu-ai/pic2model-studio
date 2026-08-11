@@ -17,7 +17,7 @@ export const DEFAULT_WORKSPACE: WorkspaceState = {
       result_asset_ids: [], active_result_asset_id: null, job_id: null, pending_action_id: null,
       agent_action_id: null, agent_run_id: null, agent_instruction: "",
     },
-    multiview: { selected: {}, regions: {}, checks: {}, quality_confirmed: false, set_id: null, job_id: null },
+    multiview: { selected: {}, regions: {}, checks: {}, quality_confirmed: false, set_id: null, job_id: null, pending_action_id: null },
     model3d: { asset_id: null, target_triangles: 50000, generation_job_id: null },
   },
 };
@@ -94,7 +94,7 @@ function parseWorkflowContexts(value: unknown): WorkspaceState["workflow_context
       agent_run_id: nullableId(target.agent_run_id),
       agent_instruction: text(target.agent_instruction),
     },
-    multiview: { selected: idMap(multi.selected), regions: rectMap(multi.regions), checks, quality_confirmed: multi.quality_confirmed === true, set_id: nullableId(multi.set_id), job_id: nullableId(multi.job_id) },
+    multiview: { selected: idMap(multi.selected), regions: rectMap(multi.regions), checks, quality_confirmed: multi.quality_confirmed === true, set_id: nullableId(multi.set_id), job_id: nullableId(multi.job_id), pending_action_id: nullableId(multi.pending_action_id) },
     model3d: {
       asset_id: nullableId(model.asset_id),
       target_triangles: typeof model.target_triangles === "number" ? Math.max(4, Math.min(10_000_000, Math.round(model.target_triangles))) : defaults.model3d.target_triangles,

@@ -18,6 +18,48 @@ const rewriteInstruction = [
 type PromptLanguage = "zh" | "en";
 type PromptPair = { zh: string; en: string };
 type RewriteCandidate = { assetId: string; prompts: PromptPair; language: PromptLanguage };
+type GenerationPollState = { inFlight: boolean; nextAt: number };
+
+const jobPolls = new WeakMap<ApiClient, Map<string, GenerationPollState>>();
+const generatedPreviewBlobs = new Map<string, Promise<Blob>>();
+const generatedPreviewCacheLimit = 32;
+
+function jobPollKey(projectId: string, jobId: string) {
+  return `${projectId}:${jobId}`;
+}
+
+function claimJobPoll(api: ApiClient, projectId: string, jobId: string, intervalMs: number) {
+  const key = jobPollKey(projectId, jobId);
+  const polls = jobPolls.get(api) ?? new Map<string, GenerationPollState>();
+  jobPolls.set(api, polls);
+  const state = polls.get(key) ?? { inFlight: false, nextAt: 0 };
+  const now = Date.now();
+  if (state.inFlight || now < state.nextAt) return false;
+  state.inFlight = true;
+  state.nextAt = now + intervalMs;
+  polls.set(key, state);
+  return true;
+}
+
+function releaseJobPoll(api: ApiClient, projectId: string, jobId: string) {
+  const state = jobPolls.get(api)?.get(jobPollKey(projectId, jobId));
+  if (state) state.inFlight = false;
+}
+
+function generatedPreviewBlob(api: ApiClient, projectId: string, assetId: string) {
+  const key = `${projectId}:${assetId}`;
+  const cached = generatedPreviewBlobs.get(key);
+  if (cached) return cached;
+  const request = api.assetContent(projectId, assetId).catch((error) => {
+    generatedPreviewBlobs.delete(key);
+    throw error;
+  });
+  generatedPreviewBlobs.set(key, request);
+  if (generatedPreviewBlobs.size > generatedPreviewCacheLimit) {
+    generatedPreviewBlobs.delete(generatedPreviewBlobs.keys().next().value!);
+  }
+  return request;
+}
 
 function requestId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -69,7 +111,7 @@ function GeneratedPreview({ projectId, api, asset, featured = false, selected = 
   useEffect(() => {
     let active = true;
     let objectUrl = "";
-    void api.assetContent(projectId, asset.id).then((blob) => {
+    void generatedPreviewBlob(api, projectId, asset.id).then((blob) => {
       objectUrl = URL.createObjectURL(blob);
       if (active) setUrl(objectUrl);
     }).catch(() => undefined);
@@ -219,7 +261,13 @@ export function PromptImageWorkspace({ projectId, api, host = new HostClient(), 
       return;
     }
     let active = true;
-    const load = () => void api.job(projectId, generationJobId).then((next) => { if (active) setJob(next); }).catch(() => undefined);
+    const load = () => {
+      if (!claimJobPoll(api, projectId, generationJobId, 2_500)) return;
+      void api.job(projectId, generationJobId)
+        .then((next) => { if (active) setJob(next); })
+        .catch(() => undefined)
+        .finally(() => { releaseJobPoll(api, projectId, generationJobId); });
+    };
     load();
     const timer = window.setInterval(load, 2500);
     return () => {
@@ -249,6 +297,7 @@ export function PromptImageWorkspace({ projectId, api, host = new HostClient(), 
     let active = true;
     let completing = false;
     const load = async () => {
+      if (!claimJobPoll(api, projectId, rewriteJobId, 1_500)) return;
       try {
         const rewriteJob = await api.job(projectId, rewriteJobId);
         if (!active || completing) return;
@@ -295,6 +344,8 @@ export function PromptImageWorkspace({ projectId, api, host = new HostClient(), 
         setRewriteNotice(null);
         setRewriteJobId(null);
         rewriteSnapshot.current = null;
+      } finally {
+        releaseJobPoll(api, projectId, rewriteJobId);
       }
     };
     void load();

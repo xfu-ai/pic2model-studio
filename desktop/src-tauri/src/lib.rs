@@ -36,16 +36,30 @@ fn is_loopback_renderer_origin(origin: &str) -> bool {
         .is_some_and(|port| port > 0)
 }
 
+#[cfg(debug_assertions)]
+fn debug_renderer_origin(value: Option<&str>) -> Result<Option<String>, HostError> {
+    let Some(origin) = value else {
+        return Ok(None);
+    };
+    if is_loopback_renderer_origin(origin) {
+        return Ok(Some(origin.to_owned()));
+    }
+    Err(HostError::Start)
+}
+
 fn renderer_origin() -> Result<String, HostError> {
     #[cfg(debug_assertions)]
     {
+        if let Some(origin) = debug_renderer_origin(
+            std::env::var("AIPIC_TO_MODEL_DEV_RENDERER_ORIGIN").ok().as_deref(),
+        )? {
+            return Ok(origin);
+        }
         if std::env::var("AIPIC_CONTROLLED_E2E").ok().as_deref() == Some("1") {
-            if let Some(origin) = std::env::var_os("AIPIC_CONTROLLED_E2E_RENDERER_ORIGIN") {
-                let origin = origin.to_string_lossy().to_string();
-                if is_loopback_renderer_origin(&origin) {
-                    return Ok(origin);
-                }
-                return Err(HostError::Start);
+            if let Some(origin) = debug_renderer_origin(
+                std::env::var("AIPIC_CONTROLLED_E2E_RENDERER_ORIGIN").ok().as_deref(),
+            )? {
+                return Ok(origin);
             }
         }
     }
@@ -340,6 +354,16 @@ mod tests {
         assert!(!is_loopback_renderer_origin("http://localhost:14202"));
         assert!(!is_loopback_renderer_origin("http://127.0.0.1:0"));
         assert!(!is_loopback_renderer_origin("http://example.test:14202"));
+    }
+
+    #[test]
+    fn debug_renderer_origin_accepts_only_a_safe_override() {
+        assert_eq!(
+            debug_renderer_origin(Some("http://127.0.0.1:14203")).unwrap(),
+            Some("http://127.0.0.1:14203".to_owned())
+        );
+        assert_eq!(debug_renderer_origin(None).unwrap(), None);
+        assert!(debug_renderer_origin(Some("https://127.0.0.1:14203")).is_err());
     }
 
     #[cfg(windows)]

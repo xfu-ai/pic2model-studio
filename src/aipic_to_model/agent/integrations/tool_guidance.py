@@ -94,6 +94,10 @@ _AGENT_TOOL_GUIDANCE: dict[str, tuple[str, str]] = {
         "Use before 3D generation when the source image's geometry visibility and reconstruction suitability are uncertain.",
         "Do not use as a general image-quality score or after a validated multiview set is already available.",
     ),
+    "image.understand_for_agent": (
+        "Use for one grounded visual question when the Agent needs image understanding without creating a persisted analysis asset.",
+        "Do not use when the user explicitly needs a saved content, style, or 3D-suitability workflow analysis.",
+    ),
     "prompt.extract_bilingual": (
         "Use to create managed Chinese and English prompt text from existing analysis assets.",
         "Do not use to call a provider, rewrite an arbitrary user message, or merge content and style.",
@@ -141,6 +145,26 @@ _AGENT_TOOL_GUIDANCE: dict[str, tuple[str, str]] = {
     "image.compress_for_provider": (
         "Use when a known image must be converted locally into provider-compatible size or encoding.",
         "Do not use as a quality enhancement, user export, or substitute for image.upscale.",
+    ),
+    "image.trim_transparent": (
+        "Use to remove transparent outer bounds locally while creating a new managed image.",
+        "Do not use for a user-selected crop, background removal, or an opaque image without transparent bounds.",
+    ),
+    "image.normalize": (
+        "Use to normalize dimensions, orientation, encoding, or alpha locally while creating a new managed image.",
+        "Do not use for semantic enhancement, super-resolution, or background removal.",
+    ),
+    "image.remove_background_local": (
+        "Use color-key or channel-threshold removal locally for a flat or channel-separable background.",
+        "Do not use for gradients, shadows, hair, or textured backgrounds; use image.remove_background for those cases.",
+    ),
+    "image.split_local": (
+        "Use alpha-components or an explicit regular grid for deterministic local image splitting.",
+        "Do not use it to guess semantic elements or an irregular layout.",
+    ),
+    "image.upscale_local": (
+        "Use the bundled offline model to upscale one managed image by 2x or 4x through a local Job.",
+        "Do not silently fall back to image.upscale when the local capability is unavailable.",
     ),
     "element.split": (
         "Use when the user wants a scene or character element extracted into a generated result using a known source and prompt.",
@@ -197,18 +221,20 @@ _AGENT_TOOL_GUIDANCE: dict[str, tuple[str, str]] = {
             "never substitute the source sheet asset ID or a crop asset ID. "
             "Choose a geometry budget before approval: use 50,000 faces for real-time/game use, "
             "100,000 for a general-purpose default, and raise it only for an explicit close-up or "
-            "high-detail requirement. Ask the user when the target use is unclear and the budget would "
+            "high-detail requirement. A 50,000-face request must use smart_low_poly=false. If "
+            "smart_low_poly=true, use 500-20,000 faces for triangles or 500-10,000 with quad=true. "
+            "Ask the user when the target use is unclear and the budget would "
             "materially affect the result. Do not use an unlimited Provider face budget. Do not call "
             "without suitable inputs, confirmed crop assets, provider profile, and user approval."
         ),
     ),
     "model3d.get_status": (
-        "Use once in an Agent run when the user asks for the current state of a known 3D job.",
-        "Do not poll repeatedly; the desktop will deliver a terminal completion event.",
+        "Compatibility alias for reading a known 3D Job status; new Agent workflows should use job.get_status.",
+        "Do not select it when job.get_status is available and do not poll repeatedly.",
     ),
     "model3d.cancel": (
-        "Use when the user explicitly asks to cancel a known cancellable 3D job.",
-        "Do not use merely to stop waiting locally or after the job is terminal.",
+        "Compatibility alias for cancelling a known 3D Job; new Agent workflows should use job.cancel.",
+        "Do not select it when job.cancel is available, without explicit user intent, or after the Job is terminal.",
     ),
     "model3d.download": (
         "Use when a successful remote 3D job needs its managed GLB result downloaded.",
@@ -249,6 +275,10 @@ _AGENT_TOOL_GUIDANCE: dict[str, tuple[str, str]] = {
     "job.retry": (
         "Use when the user requests retry of a known failed or interrupted job and the stored error says retry is safe.",
         "Do not retry unknown submissions, paid work with uncertain submission state, or a still-running job.",
+    ),
+    "job.confirm_new_submission": (
+        "Use only from the recovery flow after an interrupted paid Job is durably classified as an unknown submission and the user explicitly chooses a new submission.",
+        "Do not use it as an ordinary retry or when the original submission may still be running.",
     ),
 }
 

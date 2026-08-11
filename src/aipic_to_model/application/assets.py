@@ -72,6 +72,50 @@ def _hash(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+def _pack_bits(bits: list[bool]) -> bytes:
+    packed = bytearray()
+    value = 0
+    for index, bit in enumerate(bits, start=1):
+        value = (value << 1) | int(bit)
+        if index % 8 == 0:
+            packed.append(value)
+            value = 0
+    return bytes(packed)
+
+
+def _visual_identity(path: Path) -> tuple[str, float]:
+    """Return a scale-insensitive visual identity without exposing image content."""
+    with Image.open(path) as source:
+        image = source.convert("RGBA")
+    alpha_bounds = image.getchannel("A").getbbox()
+    if alpha_bounds is not None:
+        image = image.crop(alpha_bounds)
+    if image.width <= 0 or image.height <= 0:
+        raise ValueError("image has no visible pixels")
+
+    def values(sample: Image.Image, channel: int) -> list[int]:
+        result: list[int] = []
+        for pixel in sample.get_flattened_data():
+            alpha = int(pixel[3])
+            result.append(alpha if channel == 3 else (int(pixel[channel]) * alpha + 127) // 255)
+        return result
+
+    difference_sample = image.resize((9, 8), Image.Resampling.LANCZOS)
+    absolute_sample = image.resize((8, 8), Image.Resampling.LANCZOS)
+    bits: list[bool] = []
+    for channel in range(4):
+        difference = values(difference_sample, channel)
+        bits.extend(
+            difference[row * 9 + column] > difference[row * 9 + column + 1]
+            for row in range(8)
+            for column in range(8)
+        )
+        absolute = values(absolute_sample, channel)
+        mean = sum(absolute) / len(absolute)
+        bits.extend(mean > threshold for threshold in range(2, 256, 4))
+    return _pack_bits(bits).hex(), round(image.width / image.height, 4)
+
+
 def _row(row: Any) -> dict[str, Any]:
     result = dict(row)
     result.pop("relative_path", None)
@@ -93,6 +137,7 @@ class AssetService:
         self._repository = repository
         self._filesystem = filesystem
         self._operations = operations
+        self._visual_identity_cache: dict[str, tuple[str, float]] = {}
 
     def import_file(
         self,
@@ -318,6 +363,18 @@ class AssetService:
         headers["Content-Range"] = f"bytes {start}-{end}/{len(data)}"
         return 206, data[start : end + 1], row["mime_type"], headers
 
+    def managed_file_for_host(
+        self, root: Path, project_id: str, asset_id: str
+    ) -> Path:
+        """Resolve one managed file for a native-only action without exposing its path."""
+        row = self._repository.content(root / "project.sqlite3", project_id, asset_id)
+        if not row:
+            raise DomainErrorV1(ErrorCode.ASSET_NOT_FOUND, "资产不存在。")
+        path = self._filesystem.managed_path(root, str(row["relative_path"]))
+        if not path.is_file():
+            raise DomainErrorV1(ErrorCode.ASSET_CONTENT_MISMATCH, "资产文件不存在。")
+        return path
+
     def read_thumbnail(
         self, root: Path, project_id: str, asset_id: str
     ) -> tuple[bytes, str, dict[str, str]]:
@@ -366,6 +423,7 @@ class AssetService:
         include_hidden: bool = True,
         *,
         read_only: bool = False,
+        include_visual_identities: bool = False,
     ) -> list[dict[str, Any]]:
         if group is not None and group not in set(GROUPS.values()):
             raise DomainErrorV1(ErrorCode.SCHEMA_VALIDATION_FAILED, "资产分组无效。")
@@ -380,6 +438,22 @@ class AssetService:
         result = []
         for row in rows:
             item = _row(row)
+            if include_visual_identities and item["asset_type"] in IMAGE_ASSET_TYPES:
+                digest = str(item["sha256"])
+                identity = self._visual_identity_cache.get(digest)
+                if identity is None:
+                    try:
+                        identity = _visual_identity(
+                            self._filesystem.managed_path(root, str(row["relative_path"]))
+                        )
+                    except (OSError, ValueError):
+                        identity = None
+                    if identity is not None:
+                        if len(self._visual_identity_cache) >= 2048:
+                            self._visual_identity_cache.clear()
+                        self._visual_identity_cache[digest] = identity
+                if identity is not None:
+                    item["visual_fingerprint"], item["visual_aspect_ratio"] = identity
             item["usage"] = {
                 "child_count": row["_children"],
                 "input_link_count": row["_incoming"],

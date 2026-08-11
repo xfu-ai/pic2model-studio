@@ -42,3 +42,14 @@ desktop/src-tauri/resources/sidecar/*.exe
 
 # Generated validation evidence
 /tests/evidence/
+
+# Ephemeral local desktop-host logs
+/tmp/
+
+# Offline model artifacts and the assembled portable distribution are published
+# separately. GitHub LFS rejects the two Z-Image model files because each is
+# larger than its 2 GiB object limit.
+/resources/local-models/ollama/
+/resources/local-models/z-image-turbo/
+/resources/local-models/triposr/
+/portable/Pic2Model-Studio/

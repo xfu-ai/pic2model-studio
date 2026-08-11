@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -22,11 +23,12 @@ from ..core.models import (
     AssistantMessage,
     Message,
     SystemMessage,
+    TextContent,
     ToolResult,
     UserMessage,
     message_from_dict,
 )
-from ..core.tool import AgentTool
+from ..core.tool import ActiveToolSet, AgentTool, AgentToolCatalog
 from ..extensions.registry import AgentExtension, ExtensionRegistry
 from ..providers.base import AgentModelProvider, ModelProfile, ModelRequest
 from ..session.sqlite import LinearSessionRepository
@@ -77,6 +79,13 @@ HarnessListener = Callable[[AgentEvent], Awaitable[None] | None]
 SessionMessageSanitizer = Callable[[Message], Message]
 ContextProjectionTransform = Callable[[tuple[Message, ...]], tuple[Message, ...]]
 ProviderRequestTransform = Callable[[ModelRequest], ModelRequest]
+BeforeToolCallGuard = Callable[
+    [BeforeToolCallContext],
+    Awaitable[BeforeToolCallResult | None] | BeforeToolCallResult | None,
+]
+ProviderResponseTransform = Callable[
+    [AssistantMessage], Awaitable[AssistantMessage | None] | AssistantMessage | None
+]
 
 
 class AgentHarness:
@@ -104,6 +113,10 @@ class AgentHarness:
         session_message_sanitizer: SessionMessageSanitizer | None = None,
         context_projection_transform: ContextProjectionTransform | None = None,
         provider_request_transform: ProviderRequestTransform | None = None,
+        tool_catalog: AgentToolCatalog | None = None,
+        active_tool_names: tuple[str, ...] | None = None,
+        before_tool_call_guard: BeforeToolCallGuard | None = None,
+        provider_response_transform: ProviderResponseTransform | None = None,
     ) -> None:
         self._provider = provider
         self._repository = repository
@@ -114,14 +127,29 @@ class AgentHarness:
         self._before_compact = session_before_compact
         self._tool_context = dict(tool_context or {})
         self._stream_options = dict(stream_options or {})
+        self._before_tool_call_guard = before_tool_call_guard
+        self._provider_response_transform = provider_response_transform
         self.summarization_profile = summarization_profile or profile
         self.extensions = ExtensionRegistry()
         self.extensions.register(extensions)
         all_tools = tuple(tools) + self.extensions.tools
+        if tool_catalog is not None:
+            all_catalog_tools = (*tool_catalog.all(), *self.extensions.tools)
+            self._tool_catalog = AgentToolCatalog(all_catalog_tools)
+            initial_names = (
+                tuple(active_tool_names)
+                if active_tool_names is not None
+                else tuple(tool.name for tool in tools)
+            )
+            initial_names = (*initial_names, *(tool.name for tool in self.extensions.tools))
+        else:
+            self._tool_catalog = AgentToolCatalog(all_tools)
+            initial_names = tuple(tool.name for tool in all_tools)
+        self._active_tools = ActiveToolSet(self._tool_catalog, (), initial_names)
         self._agent = Agent(
             provider,
             profile,
-            all_tools,
+            self._active_tools.tools,
             system_prompt=system_prompt,
             loop_config=AgentLoopConfig(
                 before_provider_request=self._before_provider_request,
@@ -148,6 +176,23 @@ class AgentHarness:
     @property
     def settings(self) -> CompactionSettings:
         return self._settings
+
+    @property
+    def active_tool_names(self) -> tuple[str, ...]:
+        return self._active_tools.names
+
+    def activate_tools(self, names: tuple[str, ...]) -> tuple[str, ...]:
+        """Append catalog Tools and persist their stable order for recovery."""
+
+        added = self._active_tools.activate(names)
+        if not added:
+            return ()
+        self._agent.update_tools(self._active_tools.tools)
+        self._repository.update_config(
+            self._session_id,
+            active_tools_json=json.dumps(self._active_tools.names),
+        )
+        return added
 
     def subscribe(self, listener: HarnessListener) -> Callable[[], None]:
         self._listeners.append(listener)
@@ -216,13 +261,27 @@ class AgentHarness:
             self._repository.append_message(self._session_id, user)
             return await self._attempt(user, retry=False)
 
+    async def continue_run(self) -> tuple[Message, ...]:
+        """Resume a suspended Tool Call from its durable Tool Result.
+
+        This is intentionally distinct from ``prompt``: no synthetic user
+        message is persisted or sent to the model. It is used only after the
+        desktop has completed the original Tool Call's terminal result.
+        """
+
+        if self._lock.locked() or self.phase is not HarnessPhase.IDLE:
+            raise AgentCoreError("AgentHarness is already running.", "harness_busy")
+        async with self._lock:
+            await self._compact_if_needed("threshold")
+            return await self._attempt(None, retry=False)
+
     async def compact(self) -> bool:
         if self._lock.locked() or self.phase is not HarnessPhase.IDLE:
             raise AgentCoreError("AgentHarness is already running.", "harness_busy")
         async with self._lock:
             return await self._compact("manual")
 
-    async def _attempt(self, user: Message, *, retry: bool) -> tuple[Message, ...]:
+    async def _attempt(self, user: Message | None, *, retry: bool) -> tuple[Message, ...]:
         self.phase = HarnessPhase.TURN
         await self.extensions.emit("before_agent_start", {"session_id": self._session_id})
         await self._emit(AgentEventType.ATTEMPT_START, retry=retry)
@@ -246,11 +305,21 @@ class AgentHarness:
         unsubscribe = self._agent.subscribe(persist)
         try:
             snapshot = self.snapshot()
-            # The input is already durable but intentionally excluded from the
-            # session snapshot so Agent adds it exactly once to the model request.
-            context = tuple(item for item in snapshot.context if item.id != user.id)
+            # A fresh input is already durable but intentionally excluded from
+            # the session snapshot so Agent adds it exactly once. A terminal
+            # approval Tool Result, by contrast, is the exact final message of
+            # a suspended transcript and must be retained for continue_run.
+            context = (
+                tuple(item for item in snapshot.context if item.id != user.id)
+                if user is not None
+                else snapshot.context
+            )
             self._agent.state.messages = list(context)
-            result = await self._agent.prompt(user)
+            result = (
+                await self._agent.prompt(user)
+                if user is not None
+                else await self._agent.continue_run()
+            )
             await self._emit(AgentEventType.ATTEMPT_FINISHED, retry=retry, success=True)
             return result
         except AgentCoreError as error:
@@ -289,11 +358,23 @@ class AgentHarness:
             return BeforeToolCallResult(
                 True, str(patch.get("reason") or "Tool blocked by extension.")
             )
+        if self._before_tool_call_guard is not None:
+            guarded = self._before_tool_call_guard(context)
+            if asyncio.iscoroutine(guarded):
+                guarded = await guarded
+            if guarded is not None:
+                return guarded
         return None
 
     async def _after_tool_call(
         self, context: AfterToolCallContext, _cancellation: object
     ) -> ToolResult | None:
+        # Pi-style Tool additions change only the next provider request. Agent
+        # queues the registry replacement while this run is active, and its
+        # prepare_next_turn hook applies it after the current Tool Result has
+        # been appended to the transcript.
+        if context.result.added_tool_names:
+            self.activate_tools(context.result.added_tool_names)
         patch = await self.extensions.emit(
             "after_tool_call",
             {
@@ -357,8 +438,17 @@ class AgentHarness:
 
     async def _after_provider_response(
         self, message: AssistantMessage, _cancellation: object
-    ) -> None:
+    ) -> AssistantMessage | None:
+        transformed: AssistantMessage | None = None
+        if self._provider_response_transform is not None:
+            candidate = self._provider_response_transform(message)
+            if asyncio.iscoroutine(candidate):
+                candidate = await candidate
+            if candidate is not None:
+                transformed = candidate
+                message = candidate
         await self.extensions.emit("after_provider_response", {"message": message})
+        return transformed
 
     async def _compact_if_needed(self, reason: str) -> bool:
         if not self._settings.enabled:
@@ -391,6 +481,7 @@ class AgentHarness:
             cut = prefix_cut
         old = eligible[:cut]
         tail = eligible[cut:]
+        protected_outline = _latest_execution_outline(raw)
         input_value = CompactionInput(
             old, record.summary if record else None, reason, self._settings
         )
@@ -409,6 +500,10 @@ class AgentHarness:
             )
             if not summary:
                 raise AgentCoreError("Compaction summary was empty.", "compaction_failed")
+            if protected_outline and protected_outline not in summary:
+                # The outline is operational state, not prose for the
+                # summarizer to reinterpret. Keep the source block verbatim.
+                summary = f"{summary}\n\n{protected_outline}"
             compaction_id = self._repository.start_compaction(
                 self._session_id,
                 reason=reason,
@@ -479,6 +574,29 @@ async def _call_summarizer(function: ContextSummarizer, value: CompactionInput) 
     if asyncio.iscoroutine(result):
         return await result
     return cast(str, result)
+
+
+_EXECUTION_OUTLINE_RE = re.compile(
+    r"<execution_outline>.*?</execution_outline>", re.DOTALL
+)
+
+
+def _latest_execution_outline(messages: tuple[Message, ...]) -> str | None:
+    """Return the last complete outline exactly as the model emitted it."""
+
+    latest: str | None = None
+    for message in messages:
+        if not isinstance(message, AssistantMessage | UserMessage | SystemMessage):
+            continue
+        content = message.content
+        texts = [content] if isinstance(content, str) else [
+            item.text for item in content if isinstance(item, TextContent)
+        ]
+        for text in texts:
+            matches = _EXECUTION_OUTLINE_RE.findall(text)
+            if matches:
+                latest = matches[-1]
+    return latest
 
 
 def _default_summary(value: CompactionInput) -> str:

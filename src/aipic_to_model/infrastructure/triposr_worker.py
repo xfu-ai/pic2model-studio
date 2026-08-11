@@ -19,6 +19,7 @@ from PIL import Image
 from ..application.model_inspection import MAX_GLB_BYTES, validate_glb_bytes
 from ..domain.local_inference import LocalEngineKind
 from .local_inference import LocalInferenceCancelled, LocalInferenceGate
+from .local_model_resources import resolve_local_model_resource
 
 TRIPOSR_WORKER_CAPABILITY = "local-runtime/triposr-worker"
 TRIPOSR_RUNNER_CAPABILITY = "local-runtime/triposr-runner"
@@ -28,6 +29,11 @@ _CAPABILITY_ENVIRONMENT = {
     TRIPOSR_WORKER_CAPABILITY: "AIPIC_TRIPOSR_PYTHON",
     TRIPOSR_RUNNER_CAPABILITY: "AIPIC_TRIPOSR_RUNNER",
     TRIPOSR_MODEL_CAPABILITY: "AIPIC_TRIPOSR_MODEL",
+}
+_CAPABILITY_RESOURCES = {
+    TRIPOSR_WORKER_CAPABILITY: Path("triposr/python/python.exe"),
+    TRIPOSR_RUNNER_CAPABILITY: Path("triposr/source/run.py"),
+    TRIPOSR_MODEL_CAPABILITY: Path("triposr/model"),
 }
 _SAFE_ENVIRONMENT_KEYS = {
     "CUDA_PATH",
@@ -83,7 +89,7 @@ class TripoSRGenerationSpec:
     image_bytes: bytes
     mime_type: str
     chunk_size: int = 8192
-    marching_cubes_resolution: int = 256
+    marching_cubes_resolution: int = 512
     foreground_ratio: float = 0.85
     timeout_seconds: float = 900.0
 
@@ -97,16 +103,20 @@ class TripoSRGenerationOutput:
 
 
 def resolve_environment_triposr_capability(capability_id: str) -> Path | None:
-    """Resolve fixed Host-owned TripoSR slots without exposing native paths."""
+    """Resolve an override or bundled Host-owned TripoSR capability slot."""
 
     variable = _CAPABILITY_ENVIRONMENT.get(capability_id)
     raw = os.environ.get(variable, "") if variable is not None else ""
-    if not raw:
-        return None
-    path = Path(raw).resolve()
-    if capability_id == TRIPOSR_MODEL_CAPABILITY:
-        return path if path.is_dir() else None
-    return path if path.is_file() else None
+    directory = capability_id == TRIPOSR_MODEL_CAPABILITY
+    if raw:
+        path = Path(raw).resolve()
+        return path if (path.is_dir() if directory else path.is_file()) else None
+    relative = _CAPABILITY_RESOURCES.get(capability_id)
+    return (
+        resolve_local_model_resource(relative, directory=directory)
+        if relative is not None
+        else None
+    )
 
 
 class TripoSRWorkerRunner:
@@ -237,7 +247,6 @@ class TripoSRWorkerRunner:
             str(spec.chunk_size),
             "--mc-resolution",
             str(spec.marching_cubes_resolution),
-            "--no-remove-bg",
             "--foreground-ratio",
             str(spec.foreground_ratio),
             "--output-dir",

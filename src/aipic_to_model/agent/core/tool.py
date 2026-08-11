@@ -72,3 +72,69 @@ class ToolRegistry:
             message = error.message or "Tool arguments are invalid."
             raise InvalidToolArgumentsError(call.name, message) from error
         return tool, arguments
+
+
+class AgentToolCatalog:
+    """Immutable, ordered inventory of every Tool the Agent may activate.
+
+    The catalog is deliberately separate from :class:`ToolRegistry`: the
+    catalog describes host capabilities, while a registry is the smaller
+    per-model-turn permission surface sent to the provider.
+    """
+
+    def __init__(self, tools: tuple[AgentTool, ...] = ()) -> None:
+        registry = ToolRegistry(tuple(tools))
+        self._tools = registry.all()
+        self._by_name = {tool.name: tool for tool in self._tools}
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._by_name)
+
+    def all(self) -> tuple[AgentTool, ...]:
+        return self._tools
+
+    def get(self, name: str) -> AgentTool:
+        try:
+            return self._by_name[name]
+        except KeyError as error:
+            raise UnknownToolError(name) from error
+
+    def contains(self, name: str) -> bool:
+        return name in self._by_name
+
+    def resolve(self, names: tuple[str, ...]) -> tuple[AgentTool, ...]:
+        return tuple(self._by_name[name] for name in names if name in self._by_name)
+
+
+class ActiveToolSet:
+    """Pi-style ordered, append-only view over an immutable Tool catalog."""
+
+    def __init__(
+        self,
+        catalog: AgentToolCatalog,
+        permanent_names: tuple[str, ...] = (),
+        active_names: tuple[str, ...] = (),
+    ) -> None:
+        self._catalog = catalog
+        self._names: list[str] = []
+        self._seen: set[str] = set()
+        self.activate((*permanent_names, *active_names))
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._names)
+
+    @property
+    def tools(self) -> tuple[AgentTool, ...]:
+        return self._catalog.resolve(self.names)
+
+    def activate(self, names: tuple[str, ...]) -> tuple[str, ...]:
+        added: list[str] = []
+        for name in names:
+            if name in self._seen or not self._catalog.contains(name):
+                continue
+            self._seen.add(name)
+            self._names.append(name)
+            added.append(name)
+        return tuple(added)

@@ -27,6 +27,25 @@ class RecordingRegistry:
 
     def execute(self, *args: Any) -> ToolResultV1:
         self.calls.append(args)
+        if args[2] == "asset.get_metadata":
+            asset_id = str(args[4]["asset_id"])
+            return ToolResultV1(
+                True,
+                "succeeded",
+                "metadata-call",
+                [asset_id],
+                json.dumps(
+                    {
+                        "asset": {
+                            "id": asset_id,
+                            "asset_type": "source_image",
+                            "mime_type": "image/png",
+                        },
+                        "lineage": [],
+                    }
+                ),
+                [],
+            )
         return ToolResultV1(
             True,
             "succeeded",
@@ -75,8 +94,16 @@ def test_facade_catalog_is_fixed_precise_and_valid() -> None:
     generate = next(spec for spec in FACADE_TOOL_SPECS if spec.name == "generate_model3d")
     model_parameters = generate.parameters["properties"]["parameters"]["properties"]
     for name in ("texture", "pbr"):
-        assert model_parameters[name]["const"] is True
         assert model_parameters[name]["default"] is True
+        assert model_parameters[name]["type"] == "boolean"
+    assert model_parameters["face_limit"]["minimum"] == 1
+    face_limit_description = model_parameters["face_limit"]["description"]
+    assert "Never use zero" in face_limit_description
+    assert "use zero only" not in face_limit_description
+    assert "50,000" in face_limit_description
+    assert "smart_low_poly=false" in face_limit_description
+    assert "500-20,000" in face_limit_description
+    assert "500-10,000" in model_parameters["smart_low_poly"]["description"]
 
 
 @pytest.mark.agent
@@ -220,6 +247,7 @@ async def test_asset_inspection_returns_newest_assets_first(tmp_path: Path) -> N
                 "background_method": "color_key",
                 "target_color": [0, 255, 0],
                 "tolerance": 16,
+                "plan_step_id": "remove_background",
             },
             "image.remove_background_local",
             {
@@ -336,8 +364,8 @@ async def test_asset_inspection_returns_newest_assets_first(tmp_path: Path) -> N
                 "mode": "image",
                 "image_asset_id": "asset-1",
                 "provider_profile": "tripo3d/default",
-                "model": "tripo-v2.5-20250123",
-                "parameters": {"texture": True, "pbr": True},
+                "model": "v3.1-20260211",
+                "parameters": {"face_limit": 100_000, "texture": True, "pbr": True},
             },
         ),
         (
@@ -371,8 +399,9 @@ async def test_each_facade_dispatches_to_one_canonical_internal_tool(
     )
 
     assert not result.is_error
-    assert len(registry.calls) == 1
-    call = registry.calls[0]
+    expected_calls = 2 if facade_name in {"prepare_multiview", "generate_model3d"} else 1
+    assert len(registry.calls) == expected_calls
+    call = registry.calls[-1]
     assert call[2] == internal_name
     assert call[4] == internal_arguments
     assert call[1] == "project-bound-by-host"
@@ -381,7 +410,7 @@ async def test_each_facade_dispatches_to_one_canonical_internal_tool(
 
 @pytest.mark.agent
 @pytest.mark.asyncio
-async def test_generate_model3d_cannot_dispatch_without_textures_and_pbr(
+async def test_generate_model3d_preserves_explicit_material_preferences_for_policy_resolution(
     tmp_path: Path,
 ) -> None:
     registry, tools = _tools(tmp_path)
@@ -398,11 +427,81 @@ async def test_generate_model3d_cannot_dispatch_without_textures_and_pbr(
     )
 
     assert not result.is_error
-    assert registry.calls[0][4]["parameters"] == {
-        "texture": True,
-        "pbr": True,
+    assert registry.calls[-1][4]["parameters"] == {
+        "texture": False,
+        "pbr": False,
         "face_limit": 50_000,
     }
+
+
+@pytest.mark.agent
+@pytest.mark.asyncio
+async def test_generate_model3d_injects_a_safe_face_budget_when_omitted(
+    tmp_path: Path,
+) -> None:
+    registry, tools = _tools(tmp_path)
+
+    result = await tools["generate_model3d"].execute(
+        "call-generate-model3d-default-budget",
+        {"mode": "image", "image_asset_ref": "asset-1", "parameters": {}},
+        ToolContext(()),
+        CancellationToken(),
+    )
+
+    assert not result.is_error
+    assert registry.calls[-1][4]["parameters"] == {
+        "face_limit": 100_000,
+        "texture": True,
+        "pbr": True,
+    }
+
+
+@pytest.mark.agent
+@pytest.mark.asyncio
+async def test_prompt_asset_is_rejected_before_multiview_generation_or_approval(
+    tmp_path: Path,
+) -> None:
+    class PromptRegistry(RecordingRegistry):
+        def execute(self, *args: Any) -> ToolResultV1:
+            self.calls.append(args)
+            return ToolResultV1(
+                True,
+                "succeeded",
+                "metadata-call",
+                ["prompt-1"],
+                json.dumps(
+                    {
+                        "asset": {
+                            "id": "prompt-1",
+                            "asset_type": "prompt",
+                            "mime_type": "application/json",
+                        },
+                        "lineage": [],
+                    }
+                ),
+                [],
+            )
+
+    registry = PromptRegistry()
+    tool = next(
+        tool
+        for tool in facade_tools(
+            registry,  # type: ignore[arg-type]
+            lambda: AIPicToolInvocation(tmp_path, "project", "request"),
+        )
+        if tool.name == "prepare_multiview"
+    )
+
+    result = await tool.execute(
+        "call-invalid-source",
+        {"operation": "create", "source_asset_ref": "prompt-1"},
+        ToolContext(()),
+        CancellationToken(),
+    )
+
+    assert result.is_error
+    assert result.details["error"]["code"] == "TOOL_ARGUMENT_INVALID"
+    assert [call[2] for call in registry.calls] == ["asset.get_metadata"]
 
 
 @pytest.mark.agent
@@ -458,6 +557,14 @@ async def test_generate_model3d_cannot_dispatch_without_textures_and_pbr(
         (
             "prepare_multiview",
             {
+                "operation": "request_region_confirmation",
+                "source_asset_ref": "sheet-1",
+            },
+            "multiview.request_box_confirmation",
+        ),
+        (
+            "prepare_multiview",
+            {
                 "operation": "regenerate_view",
                 "multiview_ref": "multiview-1",
                 "target_view": "side",
@@ -503,6 +610,11 @@ async def test_generate_model3d_cannot_dispatch_without_textures_and_pbr(
         ),
         ("control_job", {"action": "cancel", "job_ref": "job-1"}, "job.cancel"),
         ("control_job", {"action": "retry", "job_ref": "job-1"}, "job.retry"),
+        (
+            "control_job",
+            {"action": "confirm_new_submission", "job_ref": "job-1"},
+            "job.confirm_new_submission",
+        ),
     ],
 )
 async def test_facade_operation_variants_have_unambiguous_routes(

@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -38,6 +39,15 @@ def test_desktop_asset_routes_are_capability_only_and_recoverable(tmp_path: Path
     assert thumbnail.headers["cache-control"] == "private, max-age=31536000, immutable"
     with Image.open(BytesIO(thumbnail.content)) as rendered:
         assert rendered.size == (32, 24)
+    listed = client.get(
+        f"/v1/projects/{project['id']}/assets",
+        headers=headers,
+        params={"include_visual_identities": "true"},
+    )
+    assert listed.status_code == 200
+    listed_asset = next(item for item in listed.json() if item["id"] == asset["id"])
+    assert len(listed_asset["visual_fingerprint"]) == 128
+    assert listed_asset["visual_aspect_ratio"] == 1.3333
     assert client.post(
         f"/v1/projects/{project['id']}/assets/import", headers={**headers, "X-Request-Id": "reuse"},
         json={"file_capability_id": image_capability, "asset_type": "source_image", "request_id": "reuse"},
@@ -72,6 +82,21 @@ def test_desktop_asset_routes_are_capability_only_and_recoverable(tmp_path: Path
     )
     assert exported_asset.status_code == 200
     assert (export_directory / asset["name"]).read_bytes() == image.read_bytes()
+    with patch(
+        "aipic_to_model.api.routers.assets._open_managed_asset_directory"
+    ) as open_directory:
+        revealed = client.post(
+            f"/v1/assets/{asset['id']}/reveal",
+            headers={**headers, "X-Request-Id": "asset-reveal"},
+            json={"project_id": project["id"], "request_id": "asset-reveal"},
+        )
+    assert revealed.status_code == 200
+    assert revealed.json() == {"asset_id": asset["id"], "opened": True}
+    open_directory.assert_called_once()
+    revealed_path = open_directory.call_args.args[0]
+    assert revealed_path.is_file()
+    assert revealed_path.parent.name == "source"
+    assert str(tmp_path) not in revealed.text
     hidden = client.post(
         f"/v1/assets/{asset['id']}/hide", headers={**headers, "X-Request-Id": "hide"},
         json={"project_id": project["id"], "request_id": "hide"},
@@ -95,11 +120,16 @@ def test_desktop_asset_routes_are_capability_only_and_recoverable(tmp_path: Path
         json={"project_id": project["id"], "impact_token": impact.json()["impact_token"], "request_id": "trash"},
     )
     assert trashed.status_code == 200 and trashed.json()["trashed_at"] is not None
+    trash_path = tmp_path / "project" / "assets" / "trash" / asset["id"] / revealed_path.name
+    assert not revealed_path.exists()
+    assert trash_path.is_file()
     restored = client.post(
         f"/v1/assets/{asset['id']}/restore", headers={**headers, "X-Request-Id": "restore"},
         json={"project_id": project["id"], "request_id": "restore"},
     )
     assert restored.status_code == 200 and restored.json()["trashed_at"] is None
+    assert revealed_path.is_file()
+    assert not trash_path.exists()
     invalid = tmp_path / "invalid.png"
     invalid.write_bytes(b"not an image")
     rejected = client.post(

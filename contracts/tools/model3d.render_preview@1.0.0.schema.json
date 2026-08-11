@@ -1,6 +1,6 @@
 {
   "capability": "preview_renderer",
-  "execution": "job",
+  "execution": "sync",
   "input_schema": {
     "additionalProperties": false,
     "properties": {

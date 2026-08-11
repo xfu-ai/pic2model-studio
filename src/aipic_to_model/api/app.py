@@ -16,9 +16,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from ..agent.integrations import FACADE_TOOL_NAMES, AgentRuntime
+from ..agent.integrations import AgentRuntime
 from ..agent.providers.base import AgentModelProvider, ModelProfile
 from ..agent.providers.qwen3_vl import QWEN3_VL_DEFAULT_MODEL
+from ..application.generation_policy import LOCAL_IMAGE_PROFILE, LOCAL_MODEL3D_PROFILE
 from ..application.host_capabilities import HostCapabilityStore
 from ..composition import compose_local_app
 from ..domain.common import DomainErrorV1
@@ -113,22 +114,19 @@ def create_app(
     credential_resolver = CredentialResolver(dependencies.secret_store)
 
     def agent_runtime_context(project_id: str) -> dict[str, object]:
-        """Return current, non-secret execution truth without probing a Provider."""
+        """Return task-neutral, non-secret execution truth without historical assets.
+
+        Managed assets are conversation inputs only after the user attaches them or
+        the Agent explicitly loads them with a read-only Tool.  Project-global
+        ``current`` and ``recent`` references must not become an implicit image for
+        a fresh conversation.
+        """
 
         root = dependencies.root_for(project_id)
         project = dependencies.projects.open(root, force_read_only=True)
-        try:
-            workspace = json.loads(dependencies.projects.workspace_state(root, project_id))
-        except json.JSONDecodeError, TypeError:
-            workspace = {}
-        if not isinstance(workspace, dict):
-            workspace = {}
-        assets = dependencies.assets.list_by_group(root, project_id, group=None, read_only=True)
-        jobs = dependencies.b02_runtime.job_views(root, include_terminal=False)
         controlled = os.environ.get("AIPIC_CONTROLLED_E2E") == "1"
-        public_profiles = dependencies.settings.get_app(dependencies.app_db).get(
-            "provider_profiles", {}
-        )
+        app_settings = dependencies.settings.get_app(dependencies.app_db)
+        public_profiles = app_settings.get("provider_profiles", {})
         if not isinstance(public_profiles, dict):
             public_profiles = {}
 
@@ -155,10 +153,56 @@ def create_app(
                 ),
             }
 
+        def local_provider_state(
+            profile_id: str, *, features: dict[str, object]
+        ) -> dict[str, object]:
+            if controlled:
+                return {
+                    "configured": True,
+                    "available": True,
+                    "mode": "controlled_offline",
+                    "backend": "local",
+                    "unavailable_reason": None,
+                    "features": features,
+                }
+            monitor = dependencies.local_provider_monitor
+            status = None
+            if monitor is not None:
+                try:
+                    status = next(
+                        (
+                            item
+                            for item in monitor.snapshot()
+                            if getattr(item, "profile_id", None) == profile_id
+                        ),
+                        None,
+                    )
+                except Exception:  # noqa: BLE001 - runtime state remains redacted.
+                    status = None
+            configured = bool(getattr(status, "configured", False))
+            available = bool(getattr(status, "available", False))
+            reason = getattr(status, "reason", None)
+            return {
+                "configured": configured,
+                "available": available,
+                "mode": "local",
+                "backend": "local",
+                "unavailable_reason": None if available else str(reason or "local_unavailable"),
+                "features": features,
+            }
+
         def image_generation_state() -> dict[str, object]:
+            backend = app_settings.get("image_generation_backend", "auto")
+            local = local_provider_state(
+                LOCAL_IMAGE_PROFILE,
+                features={"text_to_image": True, "reference_transform": False},
+            )
+            if backend == "local" or (backend == "auto" and local["available"] is True):
+                return local
             monitor = dependencies.image_provider_monitor
             if monitor is None:
-                return provider_state(MESHY_PROFILE)
+                remote = provider_state(MESHY_PROFILE)
+                return {**remote, "backend": "remote", "features": {"text_to_image": True}}
             status = monitor.status_snapshot()
             providers = status.get("providers", [])
             available = any(
@@ -171,27 +215,39 @@ def create_app(
                 "configured": configured,
                 "available": available,
                 "mode": "controlled_offline" if controlled else "live",
+                "backend": "remote",
                 "active_provider": status.get("active_provider"),
                 "unavailable_reason": None if available else "provider_unavailable",
+                "features": {"text_to_image": True, "reference_transform": True},
             }
 
-        counts: dict[str, int] = {}
-        for asset in assets:
-            kind = str(asset.get("asset_type", "unknown"))
-            counts[kind] = counts.get(kind, 0) + 1
-        current = next((asset for asset in assets if asset.get("is_current")), None)
-        contexts = workspace.get("workflow_contexts", {})
-        contexts = contexts if isinstance(contexts, dict) else {}
-        references = workspace.get("reference_context", {})
-        references = references if isinstance(references, dict) else {}
-        multiview = contexts.get("multiview", {})
-        multiview = multiview if isinstance(multiview, dict) else {}
-        model3d = contexts.get("model3d", {})
-        model3d = model3d if isinstance(model3d, dict) else {}
+        def model3d_generation_state() -> dict[str, object]:
+            backend = app_settings.get("model3d_generation_backend", "auto")
+            local = local_provider_state(
+                LOCAL_MODEL3D_PROFILE,
+                features={
+                    "input_modes": ["single_image"],
+                    "pbr_materials": False,
+                    "material_mode": "vertex_color",
+                },
+            )
+            if backend == "local" or (backend == "auto" and local["available"] is True):
+                return local
+            remote = provider_state(TRIPO_PROFILE)
+            return {
+                **remote,
+                "backend": "remote",
+                "features": {
+                    "input_modes": ["single_image", "multiview"],
+                    "pbr_materials": True,
+                    "material_mode": "provider_materials",
+                },
+            }
+
         capabilities = {
             "image_analysis": provider_state(GEMINI_PROFILE),
             "image_generation": image_generation_state(),
-            "model3d_generation": provider_state(TRIPO_PROFILE),
+            "model3d_generation": model3d_generation_state(),
             "local_model_processing": {
                 "configured": True,
                 "available": True,
@@ -202,61 +258,27 @@ def create_app(
         snapshot: dict[str, object] = {
             "schema_version": 1,
             "configuration_state": "current",
-            "facade_tools": list(FACADE_TOOL_NAMES),
             "project": {
                 "bound": True,
                 "read_only": project.root_state == "read_only",
             },
-            "workspace": {
-                "mode": workspace.get("workspace_mode", "empty"),
-                "current_asset_ref": current.get("id") if current else None,
-                "current_selection_ref": workspace.get("selection_id"),
-                "current_prompt_ref": references.get("merged_prompt_asset_id"),
-                "current_multiview_ref": multiview.get("set_id"),
-                "current_model_ref": model3d.get("asset_id"),
-            },
-            "assets": {
-                "counts_by_kind": counts,
-                "recent": [
-                    {
-                        "asset_ref": asset.get("id"),
-                        "kind": asset.get("asset_type"),
-                        "current": bool(asset.get("is_current")),
-                    }
-                    for asset in assets[-12:]
-                ],
-            },
-            "jobs": {
-                "nonterminal": [
-                    {
-                        "job_ref": job.get("id"),
-                        "job_type": job.get("job_type"),
-                        "status": job.get("status"),
-                        "stage": job.get("stage"),
-                        "progress": job.get("progress"),
-                        "can_cancel": job.get("can_cancel"),
-                        "can_stop_waiting": job.get("can_stop_waiting"),
-                    }
-                    for job in jobs
-                ]
-            },
             "capabilities": capabilities,
             "tool_conditions": {
-                "generate_images": {
+                "image.generate_from_prompt": {
                     "ready": capabilities["image_generation"]["available"],
                     "missing": []
                     if capabilities["image_generation"]["available"]
                     else ["image_generation_provider"],
                 },
-                "generate_model3d": {
+                "model3d.generate_from_image": {
                     "ready": capabilities["model3d_generation"]["available"],
                     "missing": []
                     if capabilities["model3d_generation"]["available"]
                     else ["model3d_provider"],
                 },
-                "control_job": {
-                    "ready": bool(jobs),
-                    "missing": [] if jobs else ["job_ref"],
+                "job.get_status": {
+                    "ready": False,
+                    "missing": ["explicit_job_ref"],
                 },
             },
         }
@@ -265,6 +287,27 @@ def create_app(
             hashlib.sha256(digest_source.encode("utf-8")).digest()[:8], "big"
         )
         return snapshot
+
+    def agent_planner_context(_project_id: str) -> dict[str, object]:
+        """Expose only stable, task-neutral hints to the no-tools Planner.
+
+        Neither planning nor execution receives project-global current/recent
+        assets implicitly. Historical 3D, multiview, and prompt state can
+        otherwise become a perceived user requirement in a fresh task.
+        """
+
+        return {
+            "schema_version": 1,
+            "configuration_state": "current",
+            "planner_capabilities": {
+                "local_2d": [
+                    "remove_background_local",
+                    "split_grid_local",
+                    "split_alpha_components_local",
+                ],
+                "reference_image_transform": "preserve a supplied reference image",
+            },
+        }
 
     def selected_agent_model() -> str | None:
         value = dependencies.settings.get_app(app_db).get("agent_model")
@@ -283,7 +326,7 @@ def create_app(
                 "parameters": {
                     "parser_version": 3,
                     "kind": "image",
-                    "source": "agent_generate_images",
+                    "source": "agent_image_generation",
                 }
             },
         )
@@ -294,6 +337,7 @@ def create_app(
         dependencies.root_for,
         provider_factory=agent_provider_factory,
         runtime_context_provider=agent_runtime_context,
+        planner_context_provider=agent_planner_context,
         attachment_provider=lambda project_id, asset_id: dependencies.assets.get(
             dependencies.root_for(project_id),
             project_id,
@@ -305,6 +349,7 @@ def create_app(
         )[1:3],
         agent_model_selector=selected_agent_model,
         prompt_creator=create_agent_generation_prompt,
+        job_completion_broker=dependencies.job_completion_broker,
     )
 
     def replay_app_command(action: str, payload: dict[str, str], request_id: str) -> dict | None:
@@ -450,7 +495,7 @@ def create_app(
     app.include_router(build_model_router(guard, dependencies))
     app.include_router(build_selection_router(guard, dependencies))
     app.include_router(build_tool_router(guard, dependencies))
-    app.include_router(build_approval_router(guard, dependencies))
+    app.include_router(build_approval_router(guard, dependencies, agent_runtime))
     app.include_router(build_prompt_router(guard, dependencies))
     app.include_router(build_job_router(guard, dependencies))
     app.include_router(build_event_router(guard, dependencies))

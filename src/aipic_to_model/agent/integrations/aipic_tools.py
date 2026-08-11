@@ -103,6 +103,11 @@ def _agent_result(result: ToolResultV1, tool_call_id: str) -> ToolResult:
     except (json.JSONDecodeError, TypeError):
         parsed_summary = {}
     data = parsed_summary if isinstance(parsed_summary, dict | list) else {}
+    visible_summary = (
+        data.get("message")
+        if isinstance(data, dict) and isinstance(data.get("message"), str)
+        else result.summary
+    )
     error = result.error if isinstance(result.error, dict) else {}
     action = result.ui_action if isinstance(result.ui_action, dict) else {}
     retry_allowed = bool(error.get("recoverable", False) and error.get("safe_to_retry", False))
@@ -111,7 +116,7 @@ def _agent_result(result: ToolResultV1, tool_call_id: str) -> ToolResult:
         "ok": result.ok,
         "status": result.status,
         "tool_call_id": tool_call_id,
-        "summary": result.summary,
+        "summary": visible_summary,
         "data": data,
         "output_asset_ids": result.output_asset_ids,
         "output_refs": [
@@ -133,8 +138,10 @@ def _agent_result(result: ToolResultV1, tool_call_id: str) -> ToolResult:
         value = getattr(result, name)
         if value is not None:
             details[name] = value
+    if isinstance(data, dict) and isinstance(data.get("verification"), dict):
+        details["verification"] = data["verification"]
     return ToolResult(
-        (TextContent(result.summary),),
+        (TextContent(visible_summary),),
         details=details,
         is_error=not result.ok,
         terminate=False,

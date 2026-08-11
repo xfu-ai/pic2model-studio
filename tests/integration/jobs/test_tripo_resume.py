@@ -9,7 +9,13 @@ from aipic_to_model.application.jobs.tripo_handler import (
     persist_submission_result,
 )
 from aipic_to_model.domain.job_models import JobStage, JobStatus, ResumeClass
-from aipic_to_model.domain.provider_models import ProviderResult, RemoteTaskState
+from aipic_to_model.domain.provider_models import (
+    ErrorCategory,
+    ErrorDetail,
+    ProviderResult,
+    RecommendedAction,
+    RemoteTaskState,
+)
 from aipic_to_model.infrastructure.providers.fake import FakeScenario, FakeTripo3DProvider
 from aipic_to_model.infrastructure.sqlite.connection import connect, migrate
 from aipic_to_model.infrastructure.sqlite.job_repository import SqliteJobRepository
@@ -113,6 +119,45 @@ def test_lost_submission_response_becomes_manual_review_and_is_never_claimed(
     assert saved.stage is JobStage.UNKNOWN_SUBMISSION
     assert saved.resume_class is ResumeClass.UNKNOWN_SUBMISSION
     assert jobs.claim(database, owner="unsafe-worker", lease_until="2099-01-01T00:00:00Z") is None
+
+
+def test_deterministic_create_rejection_preserves_provider_error(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    jobs = _claimed_job(database)
+    result = ProviderResult(
+        ok=False,
+        stage="creating",
+        retryable=False,
+        error=ErrorDetail(
+            code="PROVIDER_REQUEST_INVALID",
+            category=ErrorCategory.INPUT_INVALID,
+            user_message="The Provider rejected an unsupported parameter combination.",
+            recoverable=False,
+            failed_object="provider",
+            failed_step="creating",
+            fee_incurred=False,
+            safe_to_retry=False,
+            recommended_action=RecommendedAction.FIX_INPUT,
+        ),
+    )
+
+    decision = persist_submission_result(
+        jobs,
+        database,
+        job_id="job-1",
+        provider="fake-tripo",
+        result=result,
+        submission_summary={"idempotency_hash": "input-hash"},
+    )
+
+    assert decision.external_task_id is None
+    assert not decision.requires_manual_review
+    saved = jobs.get(database, job_id="job-1")
+    assert saved.status is JobStatus.FAILED
+    assert saved.stage is JobStage.CREATING
+    assert saved.resume_class is ResumeClass.MANUAL_REVIEW
+    assert saved.error["code"] == "PROVIDER_REQUEST_INVALID"
+    assert saved.error["recommended_action"] == "fix_input"
 
 
 def test_external_task_and_resume_summary_do_not_persist_signed_url(tmp_path: Path) -> None:

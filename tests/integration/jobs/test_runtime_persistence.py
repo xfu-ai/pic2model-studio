@@ -65,7 +65,7 @@ def test_preview_requests_the_desktop_capture_surface_and_optimization_is_truthf
     jobs = SqliteJobRepository()
     runtime = PersistentB02ToolRuntime(jobs, SqliteApprovalRepository())
     preview = runtime.invoke(
-        "model3d.render_preview", RiskLevel.LOCAL_REVERSIBLE, "job", root, project_id,
+        "model3d.render_preview", RiskLevel.LOCAL_REVERSIBLE, "sync", root, project_id,
         {"asset_id": "model-1"}, "call-local",
     )
     assert preview.status == "awaiting_ui_action"

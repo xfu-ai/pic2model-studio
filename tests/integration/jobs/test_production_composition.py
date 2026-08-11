@@ -21,6 +21,11 @@ def test_production_composition_registers_external_handlers_and_missing_config_i
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(OSKeyringStore, "get", lambda _self, _profile: None)
     dependencies = compose_local_app(HostCapabilityStore(), tmp_path / "app.sqlite3")
+    # This case verifies the remote missing-credential path; do not let an
+    # installed local TripoSR runtime satisfy the auto route first.
+    dependencies.settings.update_app(
+        dependencies.app_db, {"model3d_generation_backend": "remote"}
+    )
     assert {
         "image.analyze_content",
         "image.generate",

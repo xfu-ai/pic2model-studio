@@ -12,12 +12,12 @@ from aipic_to_model.application.host_capabilities import HostCapabilityStore
 from aipic_to_model.application.jobs.external_image_handler import ExternalImageJobHandler
 from aipic_to_model.application.multiview import MultiviewService
 from aipic_to_model.composition import compose_local_app
-from aipic_to_model.domain.prompt_parser import BilingualPrompt
-from aipic_to_model.domain.provider_models import ProviderResult
 from aipic_to_model.domain.production_prompts import (
     MULTIVIEW_BASE_PROMPT,
     MULTIVIEW_SHEET_REQUIREMENTS,
 )
+from aipic_to_model.domain.prompt_parser import BilingualPrompt
+from aipic_to_model.domain.provider_models import ProviderResult
 from aipic_to_model.infrastructure.sqlite.candidate_repository import CandidateRepository
 from aipic_to_model.infrastructure.sqlite.multiview_repository import MultiviewRepository
 
@@ -93,8 +93,11 @@ def test_meshy_multiview_job_returns_one_horizontal_sheet_for_manual_cropping(
     assert len(output) == 1
     assert provider.calls == 1
     assert provider.requests[0]["candidate_count"] == 1
+    assert provider.requests[0]["aspect_ratio"] == "16:9"
     rendered_prompt = str(provider.requests[0]["prompt"])
-    assert "Return one wide horizontal image" in rendered_prompt
+    assert "single 1-by-3 row" in rendered_prompt
+    assert "never use a second row" in rendered_prompt
+    assert "exactly three subject renderings in total" in rendered_prompt
     assert "the views must not touch, overlap, or visually merge" in rendered_prompt
     assert "ordered front, left side, then rear" in rendered_prompt
     sheet = dependencies.assets.get(root, project.id, output[0])
@@ -178,5 +181,6 @@ def test_custom_multiview_prompt_keeps_the_core_orthographic_constraints(
     assert MULTIVIEW_SHEET_REQUIREMENTS in rendered_prompt
     assert "Preserve the brass details and ivory ceramic material." in rendered_prompt
     assert "does not conflict with the required orthographic three-view composition" in rendered_prompt
-    assert "at least 5 percent of the full canvas width" in rendered_prompt
+    assert "at least 7 percent of the full canvas width" in rendered_prompt
+    assert "No pixel belonging to one view may enter another view's third" in rendered_prompt
     assert "Each view must be independently crop-ready" in rendered_prompt
