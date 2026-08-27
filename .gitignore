@@ -39,6 +39,18 @@ desktop/src-tauri/resources/sidecar/*.exe
 
 # Local credentials and Provider diagnostic output
 /.local/
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials.json
+service-account*.json
 
 # Generated validation evidence
 /tests/evidence/
